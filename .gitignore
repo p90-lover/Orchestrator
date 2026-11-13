@@ -1,0 +1,4 @@
+node_modules/
+.gitnexus/
+aiTemp/
+*.log
