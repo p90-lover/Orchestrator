@@ -8,7 +8,7 @@ These checks establish **handler forwarding and interface compatibility**. They 
 
 ## Native-engine cutover matrix
 
-Every row is required before a replacement engine becomes the default. Status for the new engine is **not implemented / not verified** for all rows below. Legacy AO remains the production path.
+Every row is required before a replacement engine becomes the default. Version 0.2.0-alpha.1 has isolated prototype coverage for acceptance, deduplication, turn cancellation, event paging and conservative restart recovery, plus a read-only Codex protocol adapter. **No row below is certified for production cutover.** The [MCP plugin check](native-plugin.md) verifies a tool integration, not replacement of the host's chat runtime. Legacy AO remains the production path.
 
 | Area | Required evidence |
 | --- | --- |

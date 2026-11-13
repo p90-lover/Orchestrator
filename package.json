@@ -1,11 +1,15 @@
 {
   "name": "@coding-tools/orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0-alpha.1",
   "description": "Engine-independent orchestration handler and Coding Tools compatibility contract",
   "private": true,
   "license": "UNLICENSED",
   "main": "src/orchestrator-handler.cjs",
-  "engines": { "node": ">=22" },
-  "scripts": { "test": "node --test tests/*.test.cjs", "check:coding-tools": "node scripts/check-coding-tools.cjs" },
-  "files": ["src", "docs", "README.md"]
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.cjs",
+    "check:coding-tools": "node scripts/check-coding-tools.cjs",
+    "check:plugin": "node scripts/check-plugin-coding-tools.cjs"
+  },
+  "files": ["src", "scripts", "docs", "README.md"]
 }
