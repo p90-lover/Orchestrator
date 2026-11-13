@@ -27,7 +27,7 @@ The runtime must implement all 9 runtime methods and all 27 harness methods. Con
 Node 22.13 or newer, no package install or network needed for the native runtime and unit tests:
 
 ```sh
-node --test --test-isolation=none tests/*.test.cjs
+node --test --test-concurrency=1 tests/*.test.cjs
 node scripts/check-coding-tools.cjs /absolute/path/to/coding-tools-mcp
 ```
 
@@ -37,7 +37,7 @@ For the isolated host registration and stdio round-trip check, use the existing 
 node scripts/check-plugin-coding-tools.cjs /absolute/path/to/coding-tools-mcp
 ```
 
-In a sandbox that prohibits spawning the Node test worker:
+On Node 26, the handler-only suite can also run without a test-worker subprocess. Node 22 does not support this flag; native transport tests still require child-process permission:
 
 ```sh
 node --test --test-isolation=none tests/handler.test.cjs

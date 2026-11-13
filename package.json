@@ -7,7 +7,7 @@
   "main": "src/orchestrator-handler.cjs",
   "engines": { "node": ">=22.13" },
   "scripts": {
-    "test": "node --test --test-isolation=none tests/*.test.cjs",
+    "test": "node --test --test-concurrency=1 tests/*.test.cjs",
     "check:coding-tools": "node scripts/check-coding-tools.cjs",
     "check:plugin": "node scripts/check-plugin-coding-tools.cjs"
   },
