@@ -1,6 +1,6 @@
 # Handler-first Orchestrator design
 
-Date: 2026-11-13. Status: accepted migration direction; native engine not implemented.
+Date: 2026-11-13. Status: accepted migration direction; isolated native core/protocol prototype implemented in 0.2.0-alpha.1. Product integration, full driver parity and cutover remain incomplete. The boundaries and final-engine rules below remain the target design, not a claim that every capability exists.
 
 ## Decision
 
@@ -77,4 +77,4 @@ Rolling back the version-1 boundary is a source revert with no data action. Futu
 
 ## Risks and unresolved work
 
-The boundary has high app-startup impact. Backend bundle closure must include the vendored module. Method-shape checks do not prove semantic compatibility. No native daemon, storage migration, driver capability handshake or live parity run exists in version 0.1.0. The current AO fork remains required. Those are explicit completion gates, not features implemented by the design document.
+The boundary has high app-startup impact. Backend bundle closure must include the vendored module. Method-shape checks do not prove semantic compatibility. Version 0.2.0-alpha.1 adds only an isolated native storage/coordinator and read-only Codex protocol prototype. Storage migration, production driver capability negotiation and a live host-chat parity run remain absent. The current AO fork remains required for production chats. Those are explicit completion gates, not features implemented by the design document.

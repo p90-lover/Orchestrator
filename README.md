@@ -2,7 +2,7 @@
 
 An independently versioned orchestration handler and compatibility contract for Coding Tools.
 
-**Status: migration foundation, not a replacement AO engine.** Version 0.1.0 provides a tested in-process boundary around the current AO adapter. It does not remove the existing fork, cure its internal bugs, start agents on its own, or certify a clean engine as compatible. The native-engine design is in [docs/design.md](docs/design.md); the cutover requirements are in [docs/compatibility.md](docs/compatibility.md).
+**Status: experimental native prototype, not a compatible AO replacement.** Version 0.2.0-alpha.1 adds an independent session/turn/event core, a read-only Codex protocol prototype and an isolated compatibility-test MCP plugin. The version-1 handler still wraps the existing AO adapter. Production chat cutover and removal of AO are **not implemented**. See [the plugin guide](docs/native-plugin.md), [the design](docs/design.md) and [cutover requirements](docs/compatibility.md).
 
 ## Why a separate project?
 
@@ -24,11 +24,17 @@ The runtime must implement all 9 runtime methods and all 27 harness methods. Con
 
 ## Verify
 
-Node 22 or newer, no package install or network needed:
+Node 22.13 or newer, no package install or network needed for the native runtime and unit tests:
 
 ```sh
-node --test tests/handler.test.cjs
+node --test --test-isolation=none tests/*.test.cjs
 node scripts/check-coding-tools.cjs /absolute/path/to/coding-tools-mcp
+```
+
+For the isolated host registration and stdio round-trip check, use the existing MCP SDK in a trusted Coding Tools checkout with its runtime-web dependencies installed:
+
+```sh
+node scripts/check-plugin-coding-tools.cjs /absolute/path/to/coding-tools-mcp
 ```
 
 In a sandbox that prohibits spawning the Node test worker:
@@ -41,7 +47,7 @@ The source-checkout check instantiates the real Coding Tools adapter without sta
 
 ## Scope and ownership
 
-- This repository owns the handler contract, conformance tests and native-engine design.
+- This repository owns the handler contract, conformance tests, native-engine prototype and migration design.
 - Coding Tools owns UI, task/team policy, approvals, provider-account selection and tool grants.
 - The legacy AO adapter still owns daemon-specific transport, host recovery and its database until those responsibilities have verified replacements.
 - No telemetry, disk logging, background polling, provider SDK, dynamic plugin loading or runtime network dependency is added by this handler.
