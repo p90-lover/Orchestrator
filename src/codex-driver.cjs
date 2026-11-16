@@ -8,6 +8,14 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
   const connections = new Map();
   const lostSessions = new Set();
   let closed = false;
+  function writeDelta(turn, delta) {
+    if (turn.outputFailed) return;
+    let write;
+    try { write = Promise.resolve(turn.emitText(delta)); }
+    catch (error) { write = Promise.reject(error); }
+    turn.writes = Promise.all([turn.writes, write]).then(() => undefined);
+    turn.writes.catch(error => { turn.outputFailed = true; turn.reject(error); });
+  }
   async function connection(session) {
     if (closed) throw failure("DRIVER_CLOSED", "Native driver has closed");
     if (lostSessions.has(session.id)) throw failure("SESSION_REATTACH_REQUIRED", "The previous harness thread cannot be safely reattached by this prototype");
@@ -29,8 +37,7 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
           if (!turn.providerId) { if (turn.early.length >= 128) throw failure("PROTOCOL_LIMIT", "Too many early turn events"); turn.early.push([method, params]); return; }
           if (providerId !== turn.providerId) return;
           if (method === "item/agentMessage/delta" && typeof params.delta === "string") {
-            turn.writes = turn.writes.then(() => turn.emitText(params.delta));
-            turn.writes.catch(error => turn.reject(error));
+            writeDelta(turn, params.delta);
           } else if (method === "turn/completed") {
             turn.writes.then(() => {
               if (params.turn?.status === "completed") turn.resolve();
@@ -71,7 +78,7 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
         turn.providerId = response.turn.id;
         for (const [method, params] of turn.early) {
           if ((params.turnId ?? params.turn?.id) !== turn.providerId) continue;
-          if (method === "item/agentMessage/delta" && typeof params.delta === "string") turn.writes = turn.writes.then(() => emitText(params.delta));
+          if (method === "item/agentMessage/delta" && typeof params.delta === "string") writeDelta(turn, params.delta);
           if (method === "turn/completed") turn.writes.then(() => params.turn?.status === "completed" ? resolve() : reject(failure("HARNESS_TURN_FAILED", "Harness turn did not complete")), reject);
         }
         await finished;
@@ -80,6 +87,11 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
         // A failed acknowledgement or output write does not prove the provider
         // stopped. Retire this connection before accepting another turn.
         try { await state.client.close(); } catch {}
+        if (!["HARNESS_TURN_FAILED", "TURN_CANCELLED"].includes(error?.code)) {
+          const uncertain = error instanceof Error ? error : failure("DRIVER_UNCERTAIN", "Harness delivery outcome is uncertain");
+          uncertain.uncertain = true;
+          throw uncertain;
+        }
         throw error;
       } finally { signal.removeEventListener("abort", abort); if (state.turn === turn) state.turn = null; }
     },

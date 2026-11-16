@@ -17,6 +17,7 @@ Independent local execution engine; Coding Tools remains the authority for produ
 | FR-7 | Expose an opt-in local test plugin through a supported extension path, isolated from production chats. | coding-tools-integration |
 | FR-8 | Import history from a supplied offline export with stable identity, audit trail and reversible migration. | migration-cutover |
 | FR-9 | Remove AO dependencies only after all parity, migration, security and package gates pass. | migration-cutover |
+| FR-10 | Coding Tools durably owns draft revisions, attachment snapshots and submitted inputs before clearing or dispatching them; recover with stable delivery IDs and visible uncertainty. | chat-input-host |
 
 ## 非功能需求
 

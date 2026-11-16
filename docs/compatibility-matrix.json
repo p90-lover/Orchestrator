@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "productionReady": false,
+  "baseline": {
+    "codingTools": "eee717079d029093c5c5c446767b7d3a09e5a3ca",
+    "orchestrator": "43895f5e0a9ae263bffe51ee4b34abdf82c62af2"
+  },
+  "receiptFields": ["source", "command", "scope", "result", "environment", "verifiedAt"],
+  "completionRule": "Every required area must pass on the integrated candidate; synthetic tests do not substitute for live chat, migration, rollback or packaged provenance.",
+  "areas": [
+    { "id": "input-durability", "required": true, "status": "pending", "scenarios": ["input_ack_requires_committed_revision", "stale_revision_preserves_newer_draft", "send_preserves_newer_typing", "continuous_typing_max_wait", "attachment_survives_source_removal", "write_failure_is_visible", "no_silent_truncation_or_eviction", "legacy_import_is_idempotent"], "receipts": [] },
+    { "id": "delivery", "required": true, "status": "pending", "scenarios": ["same_id_same_payload_returns_receipt", "same_id_changed_payload_conflicts", "task_and_run_linkage_is_atomic", "lost_reply_reuses_exact_receipt", "unknown_delivery_is_not_replayed", "repeated_equal_text_remains_distinct"], "receipts": [] },
+    { "id": "native-recovery", "required": true, "status": "pending", "scenarios": ["queued_restart_preserves_safe_work", "running_restart_remains_unknown", "unknown_turn_blocks_followups", "historical_unknown_is_not_reclassified", "explicit_recover_resumes_only_safe_queue", "terminal_waits_for_text_commit"], "receipts": [] },
+    { "id": "launch-and-drivers", "required": true, "status": "pending", "scenarios": ["freeze_supported_host_catalog", "each_harness_runs_without_AO", "model_effort_context_and_plain_prompt", "unsupported_capability_fails_before_launch", "warm_and_cold_start"], "receipts": [] },
+    { "id": "provider-and-tools", "required": true, "status": "pending", "scenarios": ["explicit_account_route", "no_personal_auth_fallback", "credential_rotation_without_replay", "scoped_MCP_lease_renewal", "stdio_HTTP_SSE_tools", "workspace_boundary_and_optins"], "receipts": [] },
+    { "id": "permissions", "required": true, "status": "pending", "scenarios": ["all_supported_permission_modes", "approval_and_denial_rationale", "pending_request_outside_history_page", "stale_request_rejected", "reviewer_timeout_fails_closed", "input_questions"], "receipts": [] },
+    { "id": "turn-control", "required": true, "status": "pending", "scenarios": ["send_queue_and_steer", "turn_scoped_interrupt", "stop_and_resume", "compaction", "no_cross_engine_retry"], "receipts": [] },
+    { "id": "history-and-events", "required": true, "status": "pending", "scenarios": ["stable_ids_and_order", "tool_results_and_reasoning", "bounded_cursor_pages", "reconnect_and_duplicate_events", "cursor_expiry_snapshot", "image_blob_recovery"], "receipts": [] },
+    { "id": "process-and-workspace", "required": true, "status": "pending", "scenarios": ["PID_reuse", "owned_process_tree_only", "bounded_shutdown", "reattach_identity_and_capabilities", "folder_shared_worktree_modes", "safe_junction_cleanup"], "receipts": [] },
+    { "id": "performance", "required": true, "status": "pending", "scenarios": ["maintenance_yields_to_foreground_acceptance", "progressing_startup_is_not_restarted", "oversized_wal_does_not_block_listener_start", "chat_acceptance_does_not_block_main_loop", "busy_storage_does_not_claim_agent_exit", "history_replay_is_bounded_and_partitioned", "bounded_stream_memory_and_transactions"], "receipts": [] },
+    { "id": "host-product", "required": true, "status": "pending", "scenarios": ["single_chat", "teams_and_subagents", "goals_schedules_wakeups", "terminal_preview_computer_optins", "context_and_usage", "persistent_engine_affinity"], "receipts": [] },
+    { "id": "live-chat", "required": true, "status": "blocked", "blocker": "Previous supported control path excluded host-app window; supported registration and actual native-chat execution remain unverified.", "scenarios": ["supported_plugin_registration", "fresh_isolated_real_chat", "verified_native_engine_receipt", "restart_and_attachment_recovery_in_UI"], "receipts": [] },
+    { "id": "migration-and-release", "required": true, "status": "pending", "scenarios": ["offline_import_ids_order_tools_approvals", "failed_import_preserves_original", "rollback_without_replay_or_schema_downgrade", "no_AO_runtime_build_storage_dependency", "required_CI_and_security", "published_exact_source_and_assets"], "receipts": [] }
+  ]
+}

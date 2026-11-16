@@ -68,7 +68,7 @@ test("output failure retires the provider connection before another turn", async
   const peer = fakePeer();
   const driver = createCodexDriver({ launch: async () => ({}), createClient: options => peer.createClient(options) });
   const run = emitText => driver.run({ session, turn: { id: "local", prompt: "test" }, signal: new AbortController().signal, emitText });
-  await assert.rejects(run(async () => { throw new Error("storage unavailable"); }), /storage unavailable/);
+  await assert.rejects(run(async () => { throw new Error("storage unavailable"); }), error => error.message === "storage unavailable" && error.uncertain === true);
   await assert.rejects(run(async () => {}), { code: "SESSION_REATTACH_REQUIRED" });
   assert.equal(peer.requests.filter(item => item.method === "turn/start").length, 1);
   await driver.close();
@@ -87,9 +87,34 @@ test("an invalid turn acknowledgement never permits a second inference", async (
     };
   } });
   const run = () => driver.run({ session, turn: { id: "local", prompt: "test" }, signal: new AbortController().signal, emitText: async () => {} });
-  await assert.rejects(run(), { code: "INVALID_PROTOCOL" });
+  await assert.rejects(run(), { code: "INVALID_PROTOCOL", uncertain: true });
   await assert.rejects(run(), { code: "SESSION_REATTACH_REQUIRED" });
   assert.equal(starts, 1);
+  await driver.close();
+});
+
+test("Codex deltas reach the bounded batcher before earlier writes finish", async () => {
+  let hooks;
+  const driver = createCodexDriver({ launch: async () => ({}), createClient(options) {
+    hooks = options;
+    return { async request(method) {
+      if (method === "initialize") return {};
+      if (method === "thread/start") return { thread: { id: "thread" } };
+      if (method === "turn/start") return { turn: { id: "turn" } };
+    }, notify() {}, async close() { hooks.onClose(new Error("closed")); } };
+  } });
+  const writes = [];
+  let finished = false;
+  const running = driver.run({ session, turn: { id: "local", prompt: "test" }, signal: new AbortController().signal,
+    emitText: text => new Promise(resolve => writes.push({ text, resolve })) }).then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  for (const delta of ["first", "second", "third"]) hooks.onNotification("item/agentMessage/delta", { threadId: "thread", turnId: "turn", delta });
+  hooks.onNotification("turn/completed", { threadId: "thread", turn: { id: "turn", status: "completed" } });
+  assert.deepEqual(writes.map(write => write.text), ["first", "second", "third"]);
+  assert.equal(finished, false);
+  for (const write of writes) write.resolve();
+  await running;
+  assert.equal(finished, true);
   await driver.close();
 });
 

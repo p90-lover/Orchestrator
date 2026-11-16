@@ -21,6 +21,7 @@ Deliver native-core/1.1, harness-drivers/1.1, coding-tools-integration/1.1, migr
 | FR-7 | coding-tools-integration/1.1 | Pending |
 | FR-8 | migration-cutover/1.1 | Pending |
 | FR-9 | migration-cutover/1.1 | Pending |
+| FR-10 | chat-input-host/1.1, chat-input-host/1.2 | Pending |
 
 ## 文件变更清单
 
