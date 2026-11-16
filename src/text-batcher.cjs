@@ -88,9 +88,6 @@ function createTextBatcher({
         timer = null;
         triggerFlush();
       }, delayMs);
-      if (typeof timer?.unref === "function") {
-        timer.unref();
-      }
     }
   }
 
