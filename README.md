@@ -2,7 +2,7 @@
 
 An independently versioned orchestration handler and compatibility contract for Coding Tools.
 
-**Status: experimental native prototype, not a compatible AO replacement.** Version 0.2.0-alpha.1 adds an independent session/turn/event core, a read-only Codex protocol prototype and an isolated compatibility-test MCP plugin. The version-1 handler still wraps the existing AO adapter. Production chat cutover and removal of AO are **not implemented**. See [the plugin guide](docs/native-plugin.md), [the design](docs/design.md) and [cutover requirements](docs/compatibility.md).
+**Status: experimental native prototype, not a compatible AO replacement.** Version 0.2.0-alpha.2 hardens queued recovery, uncertain provider outcomes and bounded streaming in the independent core. It retains the read-only Codex protocol prototype and isolated compatibility-test MCP plugin. The version-1 handler still wraps the existing AO adapter. Production chat cutover and removal of AO are **not implemented**. See [the plugin guide](docs/native-plugin.md), [the design](docs/design.md) and [cutover requirements](docs/compatibility.md).
 
 ## Why a separate project?
 

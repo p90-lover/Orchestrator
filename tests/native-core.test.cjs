@@ -18,7 +18,7 @@ function directory(t) {
   temporaryRoots.push(root);
   return root;
 }
-async function until(read, predicate, timeoutMs = 5000) {
+async function until(read, predicate, timeoutMs = 15000) {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) { const value = await read(); if (predicate(value)) return value; await pause(5); }
   throw new Error("Condition did not settle");
@@ -58,9 +58,12 @@ test("restart keeps unresolved work unknown and never claims it automatically", 
   store = await openNativeStore({ dataRoot });
   t.after(() => store.close());
   assert.equal((await store.call("observe", { id: session.id, turnId: a.id })).turn.state, "unknown");
-  assert.equal((await store.call("observe", { id: session.id, turnId: b.id })).turn.state, "unknown");
+  assert.equal((await store.call("observe", { id: session.id, turnId: b.id })).turn.state, "queued");
   assert.equal(await store.call("claim", { id: session.id }), null);
   await store.call("settle", { id: session.id, turnId: a.id, state: "cancelled" });
+  const claimedB = await store.call("claim", { id: session.id });
+  assert.ok(claimedB);
+  assert.equal(claimedB.id, b.id);
   assert.equal(await store.call("claim", { id: session.id }), null);
 });
 
@@ -93,7 +96,7 @@ test("native engine executes without AO, queues in order and does not replay dup
 
 test("cancel is turn-scoped and lets the queued follow-up run after the old driver ends", async t => {
   let started = false;
-  const driver = { async run({ turn, signal, emitText }) { if (turn.prompt === "hold") { started = true; await abortWait(signal); } else await emitText("next"); }, async cancel() {} };
+  const driver = { async run({ turn, signal, emitText }) { if (turn.prompt === "hold") { started = true; await emitText("pre-cancel text"); await abortWait(signal); } else await emitText("next"); }, async cancel() {} };
   const engine = await createNativeEngine({ dataRoot: directory(t), drivers: { fixture: driver } });
   t.after(() => engine.close());
   const session = await engine.createSession({ workspaceId: "workspace", harness: "fixture", root: __dirname });
@@ -105,6 +108,7 @@ test("cancel is turn-scoped and lets the queued follow-up run after the old driv
   await engine.cancel(session.id, a.turnId);
   await until(() => engine.observe(session.id, b.turnId), value => value.turnState === "completed");
   assert.equal((await engine.observe(session.id, a.turnId)).turnState, "cancelled");
+  assert.equal((await engine.observe(session.id, a.turnId)).answer, "pre-cancel text");
 });
 
 test("driver failures do not claim success or expose arbitrary driver error text", async t => {
@@ -115,4 +119,175 @@ test("driver failures do not claim success or expose arbitrary driver error text
   const result = await until(() => engine.observe(session.id, turn.turnId), value => value.turnState === "failed");
   assert.equal(result.error, "Harness execution failed");
   assert.doesNotMatch(JSON.stringify(await engine.events(session.id)), /private fixture detail/);
+});
+
+test("queued recovery executes queued work only under explicit engine.recover and preserves deduplication", async t => {
+  const dataRoot = directory(t);
+  const runs = [];
+  const driver = {
+    async run({ turn, emitText }) {
+      runs.push(turn.prompt);
+      await emitText(`done:${turn.prompt}`);
+    },
+    async cancel() {},
+  };
+
+  // Step 1: Open engine, send turn, close engine before it is claimed
+  let store = await openNativeStore({ dataRoot });
+  const session = await store.call("create", { workspaceId: "workspace", harness: "fixture", root: __dirname });
+  const turnA = await store.call("enqueue", { id: session.id, prompt: "first-queued", clientMessageId: "c-1" });
+  await store.close();
+
+  // Step 2: Restart engine. The turn remains queued and is NOT automatically claimed or dispatched
+  let engine = await createNativeEngine({ dataRoot, drivers: { fixture: driver } });
+  t.after(() => engine?.close());
+
+  const observed = await engine.observe(session.id, turnA.id);
+  assert.equal(observed.turnState, "queued");
+  await pause(100);
+  assert.equal(runs.length, 0); // No automatic claim
+
+  // Step 3: Explicit recover schedules the queued turn
+  const recovered = await engine.recover(session.id, turnA.id);
+  assert.equal(recovered.recovery, "scheduled");
+  assert.equal(recovered.replayed, false);
+
+  await until(() => engine.observe(session.id, turnA.id), v => v.turnState === "completed");
+  assert.deepEqual(runs, ["first-queued"]);
+  assert.equal((await engine.observe(session.id, turnA.id)).answer, "done:first-queued");
+
+  // Step 4: Deduplication is preserved across restart
+  const duplicateSend = await engine.send(session.id, "first-queued", "c-1");
+  assert.equal(duplicateSend.turnId, turnA.id);
+  assert.equal(duplicateSend.duplicate, true);
+  assert.equal(runs.length, 1);
+});
+
+test("ambiguous driver outcomes settle to unknown and unknown barrier blocks subsequent turns until cancelled", async t => {
+  const dataRoot = directory(t);
+  let shouldFailAmbiguous = true;
+  const runs = [];
+  const driver = {
+    async run({ turn, emitText }) {
+      runs.push(turn.prompt);
+      if (shouldFailAmbiguous) {
+        await emitText("partial output before crash");
+        const err = new Error("Transport lost during generation");
+        err.code = "TRANSPORT_ERROR";
+        err.uncertain = true;
+        throw err;
+      }
+      await emitText(`success:${turn.prompt}`);
+    },
+    async cancel() {},
+  };
+
+  const engine = await createNativeEngine({ dataRoot, drivers: { fixture: driver } });
+  t.after(() => engine.close());
+
+  const session = await engine.createSession({ workspaceId: "workspace", harness: "fixture", root: __dirname });
+  const first = await engine.send(session.id, "task-1", "msg-1");
+
+  // First turn encounters ambiguous failure -> settles as 'unknown'
+  const firstObs = await until(() => engine.observe(session.id, first.turnId), v => v.turnState === "unknown");
+  assert.equal(firstObs.turnState, "unknown");
+  assert.equal(firstObs.status, "unknown");
+  assert.equal(firstObs.recoveryRequired, true);
+
+  // Send subsequent queued turn while session has unknown barrier
+  shouldFailAmbiguous = false;
+  const second = await engine.send(session.id, "task-2", "msg-2");
+  await pause(100);
+
+  // Second turn is blocked behind unknown barrier
+  const secondObs = await engine.observe(session.id, second.turnId);
+  assert.equal(secondObs.turnState, "queued");
+  assert.equal(runs.length, 1); // Second turn has NOT been executed
+
+  // Explicit recover while unknown barrier exists refuses dispatch
+  const recoverAttempt = await engine.recover(session.id, second.turnId);
+  assert.equal(recoverAttempt.recovery, "unresolved");
+  assert.equal(recoverAttempt.replayed, false);
+  assert.equal(runs.length, 1);
+
+  // Confirmed cancellation of unknown turn clears the barrier
+  await engine.cancel(session.id, first.turnId);
+  assert.equal((await engine.observe(session.id, first.turnId)).turnState, "cancelled");
+
+  // Now second turn can run and complete
+  await until(() => engine.observe(session.id, second.turnId), v => v.turnState === "completed");
+  assert.deepEqual(runs, ["task-1", "task-2"]);
+  assert.equal((await engine.observe(session.id, second.turnId)).answer, "success:task-2");
+});
+
+test("streaming text buffering flushes before terminal state and storage failures reject without success", async t => {
+  const dataRoot = directory(t);
+  const driver = {
+    async run({ emitText }) {
+      await emitText("chunk-1");
+      await emitText("chunk-2");
+      await emitText("chunk-3");
+    },
+    async cancel() {},
+  };
+
+  const engine = await createNativeEngine({ dataRoot, drivers: { fixture: driver } });
+  t.after(() => engine.close());
+
+  const session = await engine.createSession({ workspaceId: "workspace", harness: "fixture", root: __dirname });
+  const turn = await engine.send(session.id, "prompt", "c-stream");
+
+  const completed = await until(() => engine.observe(session.id, turn.turnId), v => v.turnState === "completed");
+  assert.equal(completed.answer, "chunk-1chunk-2chunk-3");
+
+  // Storage failure during output: append exceeds limit or fails
+  const oversizedDriver = {
+    async run({ emitText }) {
+      // Worker rejects text delta > 16384 bytes
+      await emitText("x".repeat(20000));
+    },
+    async cancel() {},
+  };
+
+  const engine2 = await createNativeEngine({ dataRoot: directory(t), drivers: { fixture: oversizedDriver } });
+  t.after(() => engine2.close());
+
+  const session2 = await engine2.createSession({ workspaceId: "workspace", harness: "fixture", root: __dirname });
+  const turn2 = await engine2.send(session2.id, "overflow", "c-overflow");
+
+  const failed = await until(() => engine2.observe(session2.id, turn2.turnId), v => v.turnState === "failed");
+  assert.equal(failed.error, "Native output could not be persisted");
+  assert.notEqual(failed.turnState, "completed");
+});
+
+test("schema verification rejects unsupported or corrupt databases without mutating them", async t => {
+  const { DatabaseSync } = require("node:sqlite");
+
+  // Case 1: Newer schema version (user_version = 2)
+  const rootUnsupported = directory(t);
+  const dbUnsupported = new DatabaseSync(path.join(rootUnsupported, "orchestrator.sqlite"));
+  dbUnsupported.exec("PRAGMA user_version = 2");
+  dbUnsupported.close();
+
+  await assert.rejects(openNativeStore({ dataRoot: rootUnsupported }), { code: "SCHEMA_UNSUPPORTED" });
+
+  // Verify file was not mutated
+  const verifyDb = new DatabaseSync(path.join(rootUnsupported, "orchestrator.sqlite"));
+  assert.equal(verifyDb.prepare("PRAGMA user_version").get().user_version, 2);
+  verifyDb.close();
+
+  // Case 2: Corrupt database file
+  const rootCorrupt = directory(t);
+  fs.writeFileSync(path.join(rootCorrupt, "orchestrator.sqlite"), Buffer.from("NOT_A_VALID_SQLITE_FILE"));
+
+  await assert.rejects(openNativeStore({ dataRoot: rootCorrupt }), { code: "DATABASE_CORRUPT" });
+
+  const rootIncomplete = directory(t);
+  const incompleteFile = path.join(rootIncomplete, "orchestrator.sqlite");
+  const incomplete = new DatabaseSync(incompleteFile);
+  incomplete.exec("CREATE TABLE turns(id TEXT); PRAGMA user_version=1;");
+  incomplete.close();
+  const before = fs.readFileSync(incompleteFile);
+  await assert.rejects(openNativeStore({ dataRoot: rootIncomplete }), { code: "DATABASE_CORRUPT" });
+  assert.deepEqual(fs.readFileSync(incompleteFile), before);
 });

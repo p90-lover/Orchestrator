@@ -3,10 +3,11 @@
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { openNativeStore } = require("./native-store.cjs");
+const { createTextBatcher } = require("./text-batcher.cjs");
 
 const failure = (code, message) => Object.assign(new Error(message), { code });
 
-async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, maxActiveSessions = 8 } = {}) {
+async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, maxActiveSessions = 8, flushDelayMs = 50 } = {}) {
   if (!Number.isInteger(maxActiveSessions) || maxActiveSessions < 1 || maxActiveSessions > 64) throw failure("INVALID_CAPACITY", "Invalid active session limit");
   const available = new Map(Object.entries(drivers));
   for (const [id, driver] of available) {
@@ -52,24 +53,64 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         await store.call("settle", { id, turnId: accepted.id, state: "cancelled" });
         return;
       }
-      let writes = Promise.resolve();
       let outputFailure = null;
+      const batcher = createTextBatcher({
+        onFlush: async combinedDelta => {
+          if (closed || active.get(id) !== slot || slot.turn !== accepted) {
+            throw failure("TURN_NOT_RUNNING", "Output belongs to an inactive turn");
+          }
+          const result = await store.call("append", { id, turnId: accepted.id, delta: combinedDelta });
+          notify(id);
+          return result;
+        },
+        delayMs: Math.min(Math.max(Number.isInteger(flushDelayMs) ? flushDelayMs : 50, 1), 100),
+        maxBatchBytes: 16384,
+        maxBufferedBytes: 65536,
+      });
       const emitText = delta => {
-        if (closed || slot.controller.signal.aborted || active.get(id) !== slot || slot.turn !== accepted) return Promise.reject(failure("TURN_NOT_RUNNING", "Output belongs to an inactive turn"));
-        const write = writes.then(() => store.call("append", { id, turnId: accepted.id, delta }));
-        writes = write.catch(error => { outputFailure ??= error; });
-        write.then(() => notify(id), () => {});
-        return write;
+        if (closed || slot.controller.signal.aborted || active.get(id) !== slot || slot.turn !== accepted) {
+          return Promise.reject(failure("TURN_NOT_RUNNING", "Output belongs to an inactive turn"));
+        }
+        return batcher.append(delta).catch(error => {
+          outputFailure ??= error;
+          throw error;
+        });
       };
       try {
         await driver.run({ session: { ...session }, turn: { ...accepted }, signal: slot.controller.signal, emitText });
-        await writes;
+        await batcher.flush();
         if (outputFailure) throw outputFailure;
         await store.call("settle", { id, turnId: accepted.id, state: slot.controller.signal.aborted ? "cancelled" : "completed" });
       } catch (error) {
-        await writes;
-        await store.call("settle", { id, turnId: accepted.id, state: slot.controller.signal.aborted ? "cancelled" : "failed",
-          error: slot.controller.signal.aborted ? "" : outputFailure ? "Native output could not be persisted" : "Harness execution failed" });
+        if (slot.controller.signal.aborted) {
+          await batcher.flush().catch(() => {});
+          await batcher.dispose();
+          await store.call("settle", { id, turnId: accepted.id, state: "cancelled" });
+        } else {
+          await batcher.dispose();
+          const isAmbiguous = Boolean(
+            error?.uncertain ||
+            error?.code === "UNCERTAIN" ||
+            error?.code === "DRIVER_UNCERTAIN" ||
+            error?.code === "TRANSPORT_ERROR" ||
+            error?.ambiguous
+          );
+          if (isAmbiguous) {
+            await store.call("settle", {
+              id,
+              turnId: accepted.id,
+              state: "unknown",
+              error: "Driver outcome is uncertain",
+            });
+          } else {
+            await store.call("settle", {
+              id,
+              turnId: accepted.id,
+              state: "failed",
+              error: outputFailure ? "Native output could not be persisted" : "Harness execution failed",
+            });
+          }
+        }
       } finally { slot.turn = null; notify(id); }
     }
   }
@@ -101,9 +142,15 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         answer: selected?.answer ?? "", error: selected?.error || null, needsInput: false,
         recoveryRequired: value.session.state === "unknown", productionReady: false };
     },
-    async recover(id, turnId) {
+    async recover(id, turnId = null) {
+      checkOpen();
       const value = await engine.observe(id, turnId);
-      return { ...value, replayed: false, recovery: value.turnState === "unknown" ? "unresolved" : "observed" };
+      if (value.status === "unknown" || value.recoveryRequired) {
+        return { ...value, replayed: false, recovery: "unresolved" };
+      }
+      schedule(id);
+      const isQueued = value.turnState === "queued";
+      return { ...value, replayed: false, recovery: isQueued ? "scheduled" : "observed" };
     },
     async cancel(id, turnId) {
       checkOpen();

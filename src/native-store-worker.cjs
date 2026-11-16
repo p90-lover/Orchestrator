@@ -7,6 +7,7 @@ const path = require("node:path");
 const { randomUUID, createHash } = require("node:crypto");
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const VALID_SETTLE_STATES = new Set(["completed", "failed", "cancelled", "unknown"]);
 const MAX_TEXT = 1024 * 1024;
 let db;
 let owner;
@@ -109,7 +110,7 @@ const operations = {
     });
   },
   settle({ id, turnId, state, error = "" }) {
-    if (!TERMINAL.has(state)) throw fail("INVALID_STATE", "Invalid terminal state");
+    if (!VALID_SETTLE_STATES.has(state)) throw fail("INVALID_STATE", "Invalid terminal state");
     text(error, 2000);
     return transaction(() => {
       const current = turn(id, turnId);
@@ -157,7 +158,22 @@ try {
   try { owner.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE"); }
   catch { throw fail("STORE_IN_USE", "Another coordinator owns this data directory"); }
   db = new DatabaseSync(path.join(root, "orchestrator.sqlite"));
-  const version = query("PRAGMA user_version").user_version;
+  let version;
+  try {
+    const row = query("PRAGMA user_version");
+    if (!row || typeof row.user_version !== "number") {
+      throw fail("DATABASE_CORRUPT", "Database header is invalid");
+    }
+    version = row.user_version;
+    if (version === 1) {
+      db.prepare("SELECT id,workspace_id,harness,root,name,state,created_at,updated_at FROM sessions LIMIT 0").all();
+      db.prepare("SELECT ordinal,id,session_id,client_id,digest,prompt,state,answer,error,created_at,updated_at FROM turns LIMIT 0").all();
+      db.prepare("SELECT sequence,session_id,turn_id,type,payload,created_at FROM events LIMIT 0").all();
+    }
+  } catch (err) {
+    if (err.code === "DATABASE_CORRUPT") throw err;
+    throw fail("DATABASE_CORRUPT", `Database header or schema check failed: ${err.message}`);
+  }
   if (![0, 1].includes(version)) throw fail("SCHEMA_UNSUPPORTED", "Native store schema is newer than this runtime");
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000");
   if (version === 0) transaction(() => {
@@ -168,12 +184,16 @@ try {
       CREATE INDEX session_events ON events(session_id,sequence); PRAGMA user_version=1;`);
   });
   transaction(() => {
-    const interrupted = db.prepare("SELECT id,session_id FROM turns WHERE state IN ('queued','running')").all();
-    for (const item of interrupted) {
+    const running = db.prepare("SELECT id,session_id FROM turns WHERE state='running'").all();
+    const touchedSessions = new Set();
+    for (const item of running) {
       run("UPDATE turns SET state='unknown',error='Coordinator stopped before outcome was confirmed',updated_at=? WHERE id=?", stamp(), item.id);
       event(item.session_id, item.id, "turn.unknown");
+      touchedSessions.add(item.session_id);
     }
-    run("UPDATE sessions SET state='unknown' WHERE id IN (SELECT session_id FROM turns WHERE state='unknown')");
+    for (const sessionId of touchedSessions) {
+      settleSession(sessionId);
+    }
   });
   parentPort.postMessage({ ready: true });
   parentPort.on("message", ({ requestId, operation, args }) => {

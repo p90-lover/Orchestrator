@@ -8,6 +8,7 @@ Replace AO with an independent Coding Tools-first engine, not a renamed fork. Pr
 
 | ID | Requirements | Dependencies |
 | --- | --- | --- |
+| chat-input-host | FR-10 | None |
 | native-core | FR-1, FR-2, FR-3 | None |
 | harness-drivers | FR-4, FR-5 | native-core |
 | coding-tools-integration | FR-6, FR-7 | native-core, harness-drivers |

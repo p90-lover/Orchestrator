@@ -1,6 +1,6 @@
 {
   "name": "@coding-tools/orchestrator",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0-alpha.2",
   "description": "Engine-independent orchestration handler and Coding Tools compatibility contract",
   "private": true,
   "license": "UNLICENSED",
