@@ -175,6 +175,10 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       jobs.add(work);
       try { return await work; } finally { jobs.delete(work); }
     },
+    async readSteerReceipt(id, turnId, clientMessageId, workspaceId) {
+      checkOpen();
+      return store.call("readSteerReceipt", { id, turnId, clientMessageId, workspaceId });
+    },
     async observe(id, turnId = null) {
       checkOpen();
       const value = await store.call("observe", { id, turnId });

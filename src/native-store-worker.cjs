@@ -122,6 +122,12 @@ const operations = {
       return { state: "dispatching" };
     });
   },
+  readSteerReceipt({ id, turnId, clientMessageId, workspaceId }) {
+    const row = query(`SELECT 1 FROM steers AS receipt JOIN sessions AS session ON session.id=receipt.session_id
+      WHERE receipt.session_id=? AND receipt.turn_id=? AND receipt.client_id=? AND session.workspace_id=? AND receipt.state='accepted'`,
+    identifier(id), identifier(turnId), identifier(clientMessageId), identifier(workspaceId));
+    return row ? { state: "accepted", sessionId: id, turnId, inputId: clientMessageId, workspaceId } : null;
+  },
   finishSteer({ id, turnId, clientMessageId, state }) {
     identifier(clientMessageId);
     if (!STEER_RESULTS.has(state)) throw fail("INVALID_STATE", "Invalid steer outcome");

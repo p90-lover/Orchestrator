@@ -117,8 +117,13 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       return externalId(created.id);
     },
     async observe(id, expectedTurn) { return observation(id, expectedTurn); },
-    async recover(id, expectedTurn) {
+    async recover(id, expectedTurn, { workspaceId, inputId } = {}) {
       if (!engine || stopping || !expectedTurn) return { recovery: "unavailable", status: "unknown", message: "The existing native turn cannot be inspected; no work was started" };
+      if (inputId !== undefined) {
+        const receipt = await live().readSteerReceipt(internalId(id), expectedTurn, inputId, workspaceId);
+        return { recovery: receipt ? "observed" : "unresolved", replayed: false,
+          steerReceipt: receipt ? { ...receipt, sessionId: id } : null };
+      }
       const value = await observation(id, expectedTurn);
       return { ...value, recovery: value.recoveryRequired ? "unresolved" : "observed", replayed: false,
         message: "Observed the recorded native turn; no queue was drained or prompt replayed" };

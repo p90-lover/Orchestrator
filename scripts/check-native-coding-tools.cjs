@@ -74,7 +74,8 @@ async function main() {
   const node = { id: "fixture-node", role: "planner", parents: [], state: "pending", route };
   const run = { id: "fixture-run", workspace_id: workspaceId, project_id: "fixture-task", execution_mode: "single", cancelled: false, revision: 1, nodes: [node] };
   const protocol = [], starts = [], runtimes = [], openingTurn = {};
-  const journal = createChatInputService({ file: path.join(scratch, "inputs.sqlite"), attachmentsRoot: path.join(scratch, "attachments") });
+  const openJournal = () => createChatInputService({ file: path.join(scratch, "inputs.sqlite"), attachmentsRoot: path.join(scratch, "attachments") });
+  let journal = openJournal();
   const open = () => {
     const runtime = createNativeRuntimeAdapter({ dataRoot: scratch, drivers: { [agent]: protocolPeer(protocol, openingTurn) },
       catalog: [{ id: agent, name: "Fixture harness", models: [route.model] }],
@@ -85,7 +86,20 @@ async function main() {
   let workflow;
   try {
     const runtime = open();
-    const native = { ...runtime, harness: { ...runtime.harness, spawn(options) { starts.push(options); return runtime.harness.spawn(options); } } };
+    const native = { ...runtime, harness: { ...runtime.harness,
+      spawn(options) { starts.push(options); return runtime.harness.spawn(options); },
+      async steer(sessionId, text, inputId, scope) {
+        if (inputId !== undefined) {
+          const { receipt } = await journal.get(workspaceId, inputId);
+          assert.equal(receipt?.stage, "native-steer-target");
+          assert.equal(receipt.sessionId, sessionId);
+          assert.equal(receipt.turnId, scope.turnId);
+        }
+        const result = await runtime.harness.steer(sessionId, text, inputId, scope);
+        if (inputId === "fixture-lost-host-ack") throw new Error("Fixture lost the reply after the native receipt committed");
+        return result;
+      },
+    } };
     let composed = false;
     const handler = createAgentOrchestratorUpstream({
       resourceRoot: path.join(scratch, "no-ao-binary"), dataRoot: path.join(scratch, "no-ao-data"),
@@ -147,8 +161,12 @@ async function main() {
     await assert.rejects(workflow.call("chat_steer", lost), { code: "STEER_DELIVERY_UNKNOWN" });
     await assert.rejects(workflow.call("chat_steer", lost), { code: "INPUT_DELIVERY_UNKNOWN" });
     assert.equal((await journal.get(workspaceId, lost.inputId)).state, "unknown");
+    const recoverable = await saveSteer("fixture-lost-host-ack");
+    await assert.rejects(workflow.call("chat_steer", recoverable), /lost the reply after the native receipt/);
+    assert.equal((await journal.get(workspaceId, recoverable.inputId)).state, "unknown");
+    const steerCount = protocol.filter(row => row.method === "turn/steer").length;
     assert.deepEqual(protocol.filter(row => row.method === "turn/steer").map(row => row.params.clientUserMessageId).sort(),
-      [first.inputId, second.inputId, lost.inputId].sort());
+      [first.inputId, second.inputId, lost.inputId, recoverable.inputId].sort());
     openingTurn.finish();
     await until(() => workflow.call("observe", { ...input, nodeId: node.id }), () => node.state === "finished");
     assert.equal(node.receipt.turn_id, firstTurn);
@@ -168,11 +186,31 @@ async function main() {
     assert.equal((await reopened.harness.timeline(sessionId, firstTurn))[0].text, "fixture reply: first native turn");
     assert.equal((await reopened.harness.timeline(sessionId, followup.turnId))[0].text, "fixture reply: follow-up");
     assert.equal((await reopened.harness.recover(sessionId, followup.turnId)).replayed, false);
+    workflow.dispose();
+    await journal.close();
+    journal = openJournal();
+    const recoveredHandler = createAgentOrchestratorUpstream({
+      resourceRoot: path.join(scratch, "no-ao-binary"), dataRoot: path.join(scratch, "no-ao-data"),
+      composeRuntime: legacy => createEngineRouter({ legacy, native: reopened, nativeAgents: [agent] }),
+    });
+    let headlessCalls = 0;
+    workflow = createAgentOrchestratorWorkflow({ aoHarness: recoveredHandler.harness, inputJournal: journal,
+      requestHeadless: () => { headlessCalls += 1; throw new Error("Receipt recovery must not look up or create a current run"); },
+    });
+    const receipt = await workflow.call("chat_send", recoverable);
+    assert.deepEqual(receipt, { ok: true, steered: true, taskId, runId: run.id, nodeId: node.id, sessionId,
+      turnId: firstTurn, inputId: recoverable.inputId, status: "recovered" });
+    assert.equal((await journal.get(workspaceId, recoverable.inputId)).state, "accepted");
+    await assert.rejects(workflow.call("chat_send", lost), { code: "INPUT_DELIVERY_UNKNOWN" });
+    assert.equal((await journal.get(workspaceId, lost.inputId)).state, "unknown");
+    assert.equal(headlessCalls, 0);
+    assert.equal(protocol.filter(row => row.method === "turn/steer").length, steerCount);
     assert.equal(protocol.filter(item => item.method === "thread/start").length, 1);
     assert.equal(protocol.filter(item => item.method === "turn/start").length, 2);
     assert.equal(handler.snapshot().state, "stopped", "The native route never started the isolated legacy runtime");
     console.log(JSON.stringify({ passed: true, workflow: "Coding Tools advance, observe and steer", handler: "v1 host factory with native affinity", legacyStarted: false,
-      durableSteering: true, provider: "in-process Codex protocol fixture", restart: "isolated native storage", liveChatTested: false, productionReady: false }));
+      durableSteering: true, recoveredSteerAfterRestart: true, provider: "in-process Codex protocol fixture", restart: "isolated host journal and native storage",
+      liveChatTested: false, productionReady: false }));
   } finally {
     workflow?.dispose();
     try { await Promise.all([journal.close(), ...runtimes.map(runtime => runtime.stop())]); }

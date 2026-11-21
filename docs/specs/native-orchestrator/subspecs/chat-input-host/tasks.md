@@ -9,4 +9,4 @@
   - 证据块: Coding Tools desktop-electron/electron/agent-orchestrator-workflow.cjs:8176 uses message text for queue reconciliation; AgentOrchestratorSurface.tsx:2005 wires draft persistence without a committed revision receipt.
   - Requirements: FR-10.
   - Files: workflow, handler, main, backend bundle, AgentOrchestratorChat.tsx, AgentOrchestratorSurface.tsx, ao-chat.ts, Rust chat_input API and data model.
-  - Tests: clear only submitted revision, continuous typing maximum wait, queue durability, transport-loss receipt reconciliation, visible Preview recovery interaction.
+  - Tests: clear only submitted revision, continuous typing maximum wait, queue durability, transport-loss receipt reconciliation, visible Preview recovery interaction. For native steering include loss after the engine has committed, host journal restart, wrong or absent receipt, and zero additional provider dispatches while recovering.

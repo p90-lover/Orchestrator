@@ -92,6 +92,12 @@ test("native steering binds both turn identities and never replays an acknowledg
   await runtime.stop();
   const next = peer(), reopened = open(next.driver);
   await reopened.start();
+  const found = await reopened.harness.recover(id, turnId, { workspaceId, inputId: "first" });
+  assert.deepEqual(found.steerReceipt, { state: "accepted", sessionId: id, turnId, workspaceId, inputId: "first" });
+  assert.equal(found.replayed, false);
+  assert.equal((await reopened.harness.recover(id, turnId, { workspaceId: "other", inputId: "first" })).steerReceipt, null);
+  assert.equal((await reopened.harness.recover(id, "other-turn", { workspaceId, inputId: "first" })).steerReceipt, null);
+  assert.equal((await reopened.harness.recover(id, turnId, { workspaceId, inputId: "missing-ack" })).steerReceipt, null);
   assert.equal((await reopened.harness.steer(id, text, "first", opts)).duplicate, true);
   await assert.rejects(reopened.harness.steer(id, text, "missing-ack", opts), { code: "STEER_DELIVERY_UNKNOWN" });
   assert.deepEqual(next.steers, []);
