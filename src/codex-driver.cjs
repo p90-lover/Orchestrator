@@ -49,7 +49,8 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
       try {
         await state.client.request("initialize", { clientInfo: { name: "coding_tools_orchestrator", title: "Orchestrator", version: "0.2.0" }, capabilities: {} });
         state.client.notify("initialized", {});
-        const response = await state.client.request("thread/start", { cwd: session.root, sandbox: "read-only", approvalPolicy: "on-request", ephemeral: true, ...(model ? { model } : {}) });
+        const selectedModel = session.config?.model ?? model;
+        const response = await state.client.request("thread/start", { cwd: session.root, sandbox: "read-only", approvalPolicy: "on-request", ephemeral: true, ...(selectedModel ? { model: selectedModel } : {}) });
         if (typeof response?.thread?.id !== "string") throw failure("INVALID_PROTOCOL", "Harness did not return a thread ID");
         state.threadId = response.thread.id;
         return state;

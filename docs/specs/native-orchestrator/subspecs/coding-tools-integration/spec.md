@@ -14,6 +14,10 @@ FR-6 and FR-7. Preserve the app contract without preserving unrelated AO product
 2. WHEN compatibility is incomplete THEN the host SHALL keep the current production engine and report missing features honestly.
 3. WHEN the user enables the test plugin THEN it SHALL use isolated synthetic data and never mutate production chats or claim live parity from shape checks.
 4. WHEN an existing session is resumed THEN its recorded engine affinity SHALL be preserved.
+5. WHEN a native experimental session is created THEN the host adapter SHALL validate its capability tuple and canonical workspace before persisting or launching, and SHALL return an explicitly native session identity.
+6. WHEN the host calls recovery to inspect an existing turn THEN the adapter SHALL perform read-only observation and SHALL NOT drain a queued turn or start inference.
+7. WHEN unsupported approval, steering, compaction, terminal, provider or tool settings are requested THEN the experimental adapter SHALL fail explicitly before external execution, not silently downgrade settings.
+8. WHEN native and legacy runtimes are registered together THEN commands targeting an existing session SHALL route only to its persisted engine; an unknown engine or missing native provider SHALL fail without legacy fallback.
 
 ## 不做项
 

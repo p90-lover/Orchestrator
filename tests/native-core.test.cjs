@@ -54,17 +54,17 @@ test("restart keeps unresolved work unknown and never claims it automatically", 
   const a = await store.call("enqueue", { id: session.id, prompt: "first", clientMessageId: "one" });
   const b = await store.call("enqueue", { id: session.id, prompt: "second", clientMessageId: "two" });
   await store.call("claim", { id: session.id });
+  await assert.rejects(store.call("settle", { id: session.id, turnId: a.id, state: "cancelled", expectedState: "queued" }), { code: "TURN_OWNERSHIP_UNCONFIRMED" });
   await store.close();
   store = await openNativeStore({ dataRoot });
   t.after(() => store.close());
   assert.equal((await store.call("observe", { id: session.id, turnId: a.id })).turn.state, "unknown");
   assert.equal((await store.call("observe", { id: session.id, turnId: b.id })).turn.state, "queued");
   assert.equal(await store.call("claim", { id: session.id }), null);
-  await store.call("settle", { id: session.id, turnId: a.id, state: "cancelled" });
-  const claimedB = await store.call("claim", { id: session.id });
-  assert.ok(claimedB);
-  assert.equal(claimedB.id, b.id);
+  await assert.rejects(store.call("settle", { id: session.id, turnId: a.id, state: "cancelled" }), { code: "TURN_OWNERSHIP_UNCONFIRMED" });
   assert.equal(await store.call("claim", { id: session.id }), null);
+  assert.equal((await store.call("settle", { id: session.id, turnId: b.id, state: "cancelled", expectedState: "queued" })).state, "cancelled");
+  assert.equal((await store.call("observe", { id: session.id, turnId: a.id })).session.state, "unknown");
 });
 
 test("one coordinator owns a data root and bounded admission survives duplicates", async t => {
@@ -163,7 +163,7 @@ test("queued recovery executes queued work only under explicit engine.recover an
   assert.equal(runs.length, 1);
 });
 
-test("ambiguous driver outcomes settle to unknown and unknown barrier blocks subsequent turns until cancelled", async t => {
+test("ambiguous driver outcomes remain unknown after a cancel request without an owner", async t => {
   const dataRoot = directory(t);
   let shouldFailAmbiguous = true;
   const runs = [];
@@ -210,14 +210,10 @@ test("ambiguous driver outcomes settle to unknown and unknown barrier blocks sub
   assert.equal(recoverAttempt.replayed, false);
   assert.equal(runs.length, 1);
 
-  // Confirmed cancellation of unknown turn clears the barrier
-  await engine.cancel(session.id, first.turnId);
-  assert.equal((await engine.observe(session.id, first.turnId)).turnState, "cancelled");
-
-  // Now second turn can run and complete
-  await until(() => engine.observe(session.id, second.turnId), v => v.turnState === "completed");
-  assert.deepEqual(runs, ["task-1", "task-2"]);
-  assert.equal((await engine.observe(session.id, second.turnId)).answer, "success:task-2");
+  await assert.rejects(engine.cancel(session.id, first.turnId), { code: "TURN_OWNERSHIP_UNCONFIRMED" });
+  assert.equal((await engine.observe(session.id, first.turnId)).turnState, "unknown");
+  assert.equal((await engine.observe(session.id, second.turnId)).turnState, "queued");
+  assert.deepEqual(runs, ["task-1"]);
 });
 
 test("streaming text buffering flushes before terminal state and storage failures reject without success", async t => {
@@ -263,17 +259,17 @@ test("streaming text buffering flushes before terminal state and storage failure
 test("schema verification rejects unsupported or corrupt databases without mutating them", async t => {
   const { DatabaseSync } = require("node:sqlite");
 
-  // Case 1: Newer schema version (user_version = 2)
+  // A future schema must be rejected before any storage configuration changes.
   const rootUnsupported = directory(t);
   const dbUnsupported = new DatabaseSync(path.join(rootUnsupported, "orchestrator.sqlite"));
-  dbUnsupported.exec("PRAGMA user_version = 2");
+  dbUnsupported.exec("PRAGMA user_version = 99");
   dbUnsupported.close();
 
   await assert.rejects(openNativeStore({ dataRoot: rootUnsupported }), { code: "SCHEMA_UNSUPPORTED" });
 
   // Verify file was not mutated
   const verifyDb = new DatabaseSync(path.join(rootUnsupported, "orchestrator.sqlite"));
-  assert.equal(verifyDb.prepare("PRAGMA user_version").get().user_version, 2);
+  assert.equal(verifyDb.prepare("PRAGMA user_version").get().user_version, 99);
   verifyDb.close();
 
   // Case 2: Corrupt database file

@@ -5,6 +5,7 @@ const { DatabaseSync } = require("node:sqlite");
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID, createHash } = require("node:crypto");
+const { sessionConfig } = require("./session-config.cjs");
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const VALID_SETTLE_STATES = new Set(["completed", "failed", "cancelled", "unknown"]);
@@ -24,7 +25,8 @@ const identifier = value => {
 const pageSize = value => Number.isInteger(value) && value > 0 && value <= 200 ? value : 50;
 const query = (sql, ...values) => db.prepare(sql).get(...values);
 const run = (sql, ...values) => db.prepare(sql).run(...values);
-const session = id => query("SELECT * FROM sessions WHERE id=?", identifier(id));
+const sessionValue = row => row ? { ...row, config: sessionConfig(JSON.parse(row.config ?? "{}")) } : row;
+const session = id => sessionValue(query("SELECT * FROM sessions WHERE id=?", identifier(id)));
 const turn = (sessionId, turnId) => query("SELECT * FROM turns WHERE session_id=? AND id=?", identifier(sessionId), identifier(turnId));
 function requireSession(id) {
   const value = session(id);
@@ -48,12 +50,19 @@ function settleSession(id) {
 }
 
 const operations = {
-  create({ id = randomUUID(), workspaceId, harness, root, name = "" }) {
+  create({ id = randomUUID(), workspaceId, harness, root, name = "", config = {} }) {
     identifier(id); identifier(workspaceId); identifier(harness); text(root, 4096); text(name, 200);
     if (!path.isAbsolute(root)) throw fail("INVALID_ROOT", "Session root must be absolute");
+    const options = JSON.stringify(sessionConfig(config));
     return transaction(() => {
+      const previous = session(id);
+      if (previous) {
+        if (previous.workspace_id !== workspaceId || previous.harness !== harness || previous.root !== root || previous.name !== name
+          || JSON.stringify(previous.config) !== options) throw fail("IDEMPOTENCY_CONFLICT", "Session identity belongs to another launch");
+        return { ...previous, duplicate: true };
+      }
       const at = stamp();
-      run("INSERT INTO sessions(id,workspace_id,harness,root,name,state,created_at,updated_at) VALUES(?,?,?,?,?,'idle',?,?)", id, workspaceId, harness, root, name, at, at);
+      run("INSERT INTO sessions(id,workspace_id,harness,root,name,state,created_at,updated_at,config) VALUES(?,?,?,?,?,'idle',?,?,?)", id, workspaceId, harness, root, name, at, at, options);
       event(id, null, "session.created");
       return session(id);
     });
@@ -61,7 +70,7 @@ const operations = {
   get({ id }) { return requireSession(id); },
   list({ after = "", limit = 50 } = {}) {
     text(after, 128);
-    return db.prepare("SELECT * FROM sessions WHERE id>? ORDER BY id LIMIT ?").all(after, pageSize(limit));
+    return db.prepare("SELECT * FROM sessions WHERE id>? ORDER BY id LIMIT ?").all(after, pageSize(limit)).map(sessionValue);
   },
   enqueue({ id, prompt, clientMessageId, capacity = 32 }) {
     identifier(clientMessageId); text(prompt);
@@ -109,13 +118,16 @@ const operations = {
       return { sequence: event(id, turnId, "text.delta", { text: delta }) };
     });
   },
-  settle({ id, turnId, state, error = "" }) {
+  settle({ id, turnId, state, error = "", expectedState }) {
     if (!VALID_SETTLE_STATES.has(state)) throw fail("INVALID_STATE", "Invalid terminal state");
     text(error, 2000);
     return transaction(() => {
       const current = turn(id, turnId);
       if (!current) throw fail("TURN_NOT_FOUND", "Turn does not exist");
       if (TERMINAL.has(current.state)) return current;
+      if (current.state === "unknown" || (expectedState !== undefined && current.state !== expectedState)) {
+        throw fail("TURN_OWNERSHIP_UNCONFIRMED", "The original turn outcome must be confirmed before changing its state");
+      }
       if (state !== "cancelled" && current.state !== "running") throw fail("INVALID_TRANSITION", "Only a running turn can complete or fail");
       run("UPDATE turns SET state=?,error=?,updated_at=? WHERE id=?", state, error, stamp(), turnId);
       settleSession(id);
@@ -165,16 +177,17 @@ try {
       throw fail("DATABASE_CORRUPT", "Database header is invalid");
     }
     version = row.user_version;
-    if (version === 1) {
+    if (version === 1 || version === 2) {
       db.prepare("SELECT id,workspace_id,harness,root,name,state,created_at,updated_at FROM sessions LIMIT 0").all();
       db.prepare("SELECT ordinal,id,session_id,client_id,digest,prompt,state,answer,error,created_at,updated_at FROM turns LIMIT 0").all();
       db.prepare("SELECT sequence,session_id,turn_id,type,payload,created_at FROM events LIMIT 0").all();
+      if (version === 2) db.prepare("SELECT config FROM sessions LIMIT 0").all();
     }
   } catch (err) {
     if (err.code === "DATABASE_CORRUPT") throw err;
     throw fail("DATABASE_CORRUPT", `Database header or schema check failed: ${err.message}`);
   }
-  if (![0, 1].includes(version)) throw fail("SCHEMA_UNSUPPORTED", "Native store schema is newer than this runtime");
+  if (![0, 1, 2].includes(version)) throw fail("SCHEMA_UNSUPPORTED", "Native store schema is newer than this runtime");
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000");
   if (version === 0) transaction(() => {
     db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,harness TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -182,6 +195,9 @@ try {
       CREATE INDEX turn_queue ON turns(session_id,state,ordinal);
       CREATE TABLE events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL REFERENCES sessions(id),turn_id TEXT,type TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL);
       CREATE INDEX session_events ON events(session_id,sequence); PRAGMA user_version=1;`);
+  });
+  if (version < 2) transaction(() => {
+    db.exec("ALTER TABLE sessions ADD COLUMN config TEXT NOT NULL DEFAULT '{}'; PRAGMA user_version=2;");
   });
   transaction(() => {
     const running = db.prepare("SELECT id,session_id FROM turns WHERE state='running'").all();

@@ -80,8 +80,10 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         await driver.run({ session: { ...session }, turn: { ...accepted }, signal: slot.controller.signal, emitText });
         await batcher.flush();
         if (outputFailure) throw outputFailure;
+        await slot.cancellation;
         await store.call("settle", { id, turnId: accepted.id, state: slot.controller.signal.aborted ? "cancelled" : "completed" });
       } catch (error) {
+        await slot.cancellation;
         if (slot.controller.signal.aborted) {
           await batcher.flush().catch(() => {});
           await batcher.dispose();
@@ -111,22 +113,22 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
             });
           }
         }
-      } finally { slot.turn = null; notify(id); }
+      } finally { slot.turn = null; slot.cancellation = null; notify(id); }
     }
   }
 
   const engine = {
     capabilities() {
-      return { engine: "orchestrator-native", schemaVersion: 1, productionReady: false,
+      return { engine: "orchestrator-native", schemaVersion: 2, productionReady: false,
         supported: ["sessions", "durable-turns", "deduplication", "queued-send", "text-output", "event-pages", "explicit-recovery", "cancellation"],
         missing: ["live-harness-parity", "tool-approvals", "input-questions", "steering", "compaction", "offline-AO-import", "Coding-Tools-cutover"],
         drivers: [...available.keys()] };
     },
-    async createSession({ workspaceId, harness, root, name = "" }) {
+    async createSession({ id = randomUUID(), workspaceId, harness, root, name = "", config = {} }) {
       checkOpen();
       if (!available.has(harness)) throw failure("DRIVER_UNAVAILABLE", "Requested native driver is unavailable");
       if (typeof root !== "string" || !path.isAbsolute(root)) throw failure("INVALID_ROOT", "Workspace root must be absolute");
-      return store.call("create", { id: randomUUID(), workspaceId, harness, root, name });
+      return store.call("create", { id, workspaceId, harness, root, name, config });
     },
     async send(id, prompt, clientMessageId) {
       checkOpen();
@@ -158,19 +160,30 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       // Check ownership before signalling anything; a stale UI must not stop a
       // different turn merely because the same session now has new work.
       const { session, turn } = await store.call("observe", { id, turnId });
+      if (["completed", "failed", "cancelled"].includes(turn.state)) return { turnId, state: turn.state };
       const slot = active.get(id);
-      if (slot?.turn?.id === turn.id) {
-        slot.controller.abort();
-        await available.get(session.harness).cancel({ sessionId: id, turnId });
-        await slot.job;
+      if (turn.state === "unknown" || (turn.state === "running" && slot?.turn?.id !== turnId)) {
+        throw failure("TURN_OWNERSHIP_UNCONFIRMED", "No verified owner can confirm this turn stopped; queued work was not started");
       }
-      const result = await store.call("settle", { id, turnId, state: "cancelled" });
-      schedule(id);
+      if (turn.state === "running") {
+        slot.cancellation ??= Promise.resolve().then(async () => {
+          try { await available.get(session.harness).cancel({ sessionId: id, turnId }); }
+          catch { return false; }
+          if (slot.turn?.id === turnId) slot.controller.abort();
+          return true;
+        });
+        if (!await slot.cancellation) throw failure("TURN_OWNERSHIP_UNCONFIRMED", "The driver did not confirm the turn stopped");
+        if (slot.turn?.id === turnId) await slot.job;
+        return { turnId, state: (await store.call("observe", { id, turnId })).turn.state };
+      }
+      const result = await store.call("settle", { id, turnId, state: "cancelled", expectedState: "queued" });
       notify(id);
       return { turnId: result.id, state: result.state };
     },
     events(id, options = {}) { checkOpen(); return store.call("events", { ...options, id }); },
     sessions(options = {}) { checkOpen(); return store.call("list", options); },
+    session(id) { checkOpen(); return store.call("get", { id }); },
+    closeSession(id) { checkOpen(); return store.call("closeSession", { id }); },
     watch(listener) {
       checkOpen();
       if (typeof listener !== "function") throw failure("INVALID_LISTENER", "A listener function is required");

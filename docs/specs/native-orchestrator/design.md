@@ -16,7 +16,7 @@ Sessions contain stable ID, workspace ID, harness ID, state and created/updated 
 
 ## Lifecycle
 
-A command is accepted in a transaction, then dispatched once. One active turn per session. Queue capacity is checked atomically. A worker emits persisted text/events and terminal state. On restart, claimed/running turns become `unknown` and block that session's queue; never-claimed turns remain `queued`. An explicit recovery schedules queued work only when no unknown turn blocks it. Historical unknown turns are never reclassified as safe. Confirmed cancellation clears the barrier. Driver transport uncertainty must not be reported as definite failure or trigger another inference. Text deltas are batched for at most 100 ms or 16 KiB and flushed before terminal state; bounded admission and backpressure prevent unbounded buffers.
+A command is accepted in a transaction, then dispatched once. One active turn per session. Queue capacity is checked atomically. A worker emits persisted text/events and terminal state. On restart, claimed/running turns become `unknown` and block that session's queue; never-claimed turns remain `queued`. An explicit recovery schedules queued work only when no unknown turn blocks it. Historical unknown turns block the queue. A cancel request without a verified owner does not clear that barrier; the prototype has no external reconciliation path for those turns. Driver transport uncertainty must not be reported as definite failure or trigger another inference. Text deltas are batched for at most 100 ms or 16 KiB and flushed before terminal state; bounded admission and backpressure prevent unbounded buffers.
 
 ## Storage boundary
 
