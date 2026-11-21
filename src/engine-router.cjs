@@ -53,6 +53,7 @@ function createEngineRouter({ legacy, native, nativeAgents = [] } = {}) {
   for (const name of ["idleChatSessions", "quietWorkingChatSessions", "staleSessions", "warmSessions"]) {
     harness[name] = async (...args) => [...await legacy.harness[name](...args), ...(native ? await native.harness[name](...args) : [])];
   }
+  if (typeof legacy.harness.busyChatSessions === "function") harness.busyChatSessions = (...args) => legacy.harness.busyChatSessions(...args);
   harness.anySessionWorking = async (...args) => Boolean(await legacy.harness.anySessionWorking(...args) || native && await native.harness.anySessionWorking(...args));
   for (const name of HARNESS_METHODS) if (typeof harness[name] !== "function") throw fail("ROUTER_CONTRACT_MISSING", `Unrouted harness operation: ${name}`);
   const runtime = Object.fromEntries(RUNTIME_METHODS.map(name => [name, (...args) => Reflect.apply(legacy[name], legacy, args)]));

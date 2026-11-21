@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const path = require("node:path");
-const { HANDLER_VERSION, CONTRACT_VERSION, RUNTIME_METHODS, HARNESS_METHODS, inspectRuntime, createOrchestratorHandler } = require("../src/orchestrator-handler.cjs");
+const { HANDLER_VERSION, CONTRACT_VERSION, RUNTIME_METHODS, HARNESS_METHODS, OPTIONAL_HARNESS_METHODS, inspectRuntime, createOrchestratorHandler } = require("../src/orchestrator-handler.cjs");
 
 const root = process.argv[2];
 if (!root || !path.isAbsolute(root)) throw new Error("Pass an absolute Coding Tools source checkout path");
@@ -14,12 +14,13 @@ const runtime = createAgentOrchestratorUpstream({
 const inspection = inspectRuntime(runtime);
 assert.equal(inspection.shapeCompatible, true, inspection.missing.join(", "));
 assert.deepEqual(Object.keys(runtime).sort(), [...RUNTIME_METHODS, "harness"].sort());
-assert.deepEqual(Object.keys(runtime.harness).sort(), [...HARNESS_METHODS].sort());
+const optional = OPTIONAL_HARNESS_METHODS.filter(name => typeof runtime.harness[name] === "function");
+assert.deepEqual(Object.keys(runtime.harness).sort(), [...HARNESS_METHODS, ...optional].sort());
 const handler = createOrchestratorHandler({ runtime });
 assert.deepEqual(handler.snapshot(), runtime.snapshot());
 assert.equal(handler.snapshot().state, "stopped");
 console.log(JSON.stringify({
-  handlerVersion: HANDLER_VERSION, contractVersion: CONTRACT_VERSION,
+  handlerVersion: HANDLER_VERSION, contractVersion: CONTRACT_VERSION, optionalHarnessMethods: optional,
   shapeCompatible: true, runtimeMethods: RUNTIME_METHODS.length, harnessMethods: HARNESS_METHODS.length,
   engineStarted: false, replacementEngineBehavioralParity: "not_certified",
 }, null, 2));

@@ -42,6 +42,15 @@ test("every operation preserves arguments, receiver and result, with one invocat
   }
 });
 
+test("busy session discovery is optional and forwards the original result and receiver", () => {
+  const runtime = fixture();
+  assert.equal(createOrchestratorHandler({ runtime }).harness.busyChatSessions, undefined);
+  const result = Promise.resolve(["session-1"]);
+  runtime.harness.busyChatSessions = function () { assert.equal(this, runtime.harness); return result; };
+  const { busyChatSessions } = createOrchestratorHandler({ runtime }).harness;
+  assert.equal(busyChatSessions(), result);
+});
+
 test("zero arguments are not changed to an explicit undefined argument", () => {
   const runtime = fixture((_name, args) => args.length);
   const handler = createOrchestratorHandler({ runtime });

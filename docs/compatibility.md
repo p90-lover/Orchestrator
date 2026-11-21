@@ -28,7 +28,7 @@ Every row is required before a replacement engine becomes the default. Version 0
 
 ## Version-1 methods
 
-The authoritative lists are `RUNTIME_METHODS` and `HARNESS_METHODS` in `src/orchestrator-handler.cjs`. The real-checkout probe compares them to the instantiated adapter and fails on either missing or extra methods. An extra upstream method requires a deliberate contract decision; a non-breaking addition can extend the contract only after conformance coverage and both repositories are updated.
+The authoritative required lists are `RUNTIME_METHODS` and `HARNESS_METHODS` in `src/orchestrator-handler.cjs`. The real-checkout probe verifies the required inventory and reports known optional methods. Handler 0.1.1 adds optional `busyChatSessions` for the host's autonomous-turn discovery. Engines that have it keep the original receiver and result; older engines can omit it. An additional upstream method requires a deliberate contract decision and conformance coverage in both repositories.
 
 Version 1 retains the legacy method signatures and opaque operation payloads. It is not yet a serialized wire schema. Any native implementation must freeze fixtures for arguments, return shapes, terminal states and error codes before claiming semantic parity. Never infer compatibility solely from an object having function properties.
 

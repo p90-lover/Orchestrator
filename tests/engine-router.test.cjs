@@ -51,6 +51,15 @@ test("engine router stops both engines even when one stop fails", async () => {
   assert.equal(router.call("legacy_status"), "legacy");
 });
 
+test("engine router keeps legacy busy session discovery when the native engine does not offer it", () => {
+  const legacy = runtime("legacy"), native = runtime("native");
+  const discovery = Promise.resolve(["legacy-session"]);
+  legacy.engine.harness.busyChatSessions = function () { assert.equal(this, legacy.engine.harness); return discovery; };
+  const router = createEngineRouter({ legacy: legacy.engine, native: native.engine });
+  assert.equal(router.harness.busyChatSessions(), discovery);
+  assert.deepEqual(native.calls, []);
+});
+
 test("engine router preserves synchronous watch subscription and cleanup", () => {
   const legacy = runtime("legacy"), native = runtime("native");
   const router = createEngineRouter({ legacy: legacy.engine, native: native.engine });
