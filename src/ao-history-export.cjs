@@ -35,27 +35,29 @@ function convertAoHistory(value) {
     if (!only(conversation, ["workspaceId", "pages"])) throw invalid("Invalid AO conversation record");
     const { workspaceId, pages } = conversation;
     if (!id(workspaceId) || !Array.isArray(pages) || !pages.length || pages.length > 200) throw invalid("AO capture needs a workspace and a bounded page chain");
-    let before = null, metadata, turnIds, state;
-    const result = [];
+    let before = null, metadata;
+    const result = [], turnsById = new Map();
     for (const [index, page] of pages.entries()) {
       if (!only(page, ["beforeSequence", "snapshot"]) || !record(page.snapshot) || page.beforeSequence !== before) throw missing("AO snapshot cursor chain is incomplete");
       const { turns, messages, activities, hasMoreBefore, oldestSequence, ...identity } = page.snapshot;
       if (!id(identity.conversationId) || !id(identity.sessionId) || identity.mode !== "chat" || identity.controller !== "stopped"
         || !sequence(identity.latestSequence) || typeof hasMoreBefore !== "boolean" || !sequence(oldestSequence)
-        || !Array.isArray(turns) || !turns.length || !Array.isArray(messages) || !Array.isArray(activities)) {
+        || !Array.isArray(turns) || !Array.isArray(messages) || !Array.isArray(activities)) {
         throw invalid("Only complete snapshots of stopped AO chats may be imported");
       }
       if (identity.branchedFromEarlierMessage || identity.branchPoints?.length || identity.threadState?.status === "active" || identity.threadState?.waitingOn?.length
         || turns.some(turn => !record(turn) || !id(turn.id) || !FINISHED_TURNS.has(turn.state) || turn.rolledBack)) {
         throw missing("AO capture contains branched history, active work or a turn not visible in the snapshot");
       }
-      if (index === 0) {
-        metadata = { ...identity, turns };
-        turnIds = new Set(turns.map(turn => turn.id));
-        if (turnIds.size !== turns.length) throw invalid("AO turn identities must be unique");
-        const last = turns.at(-1).state;
-        state = last === "failed" ? "failed" : ["cancelled", "interrupted"].includes(last) ? "cancelled" : "completed";
-      } else if (!isDeepStrictEqual({ ...identity, turns }, metadata)) throw missing("The AO chat changed between capture pages");
+      if (index === 0) metadata = identity;
+      else if (!isDeepStrictEqual(identity, metadata)) throw missing("The AO chat changed between capture pages");
+      const turnIds = new Set();
+      for (const turn of turns) {
+        if (turnIds.has(turn.id)) throw invalid("AO turn identities must be unique within a page");
+        if (turnsById.has(turn.id) && !isDeepStrictEqual(turnsById.get(turn.id), turn)) throw missing("An AO turn changed between capture pages");
+        turnIds.add(turn.id);
+        turnsById.set(turn.id, turn);
+      }
       if ((!hasMoreBefore) !== (index === pages.length - 1)) throw missing("AO capture does not end at the oldest page");
       const rows = [];
       for (const [kind, entries] of [["message", messages], ["activity", activities]]) {
@@ -88,8 +90,15 @@ function convertAoHistory(value) {
       before = oldestSequence;
     }
     result.sort((a, b) => a.sequence - b.sequence);
+    if (result.some((entry, index) => entry.sequence !== index + 1)) throw missing("The AO timeline has missing or hidden entries");
+    const ordered = new Set();
+    for (let index = pages.length - 1; index >= 0; index--) for (const turn of pages[index].snapshot.turns) ordered.add(turn.id);
+    const turns = [...ordered].map(turnId => turnsById.get(turnId));
+    if (!turns.length) throw missing("The AO capture has no finished turn");
+    const last = turns.at(-1).state;
+    const state = last === "failed" ? "failed" : ["cancelled", "interrupted"].includes(last) ? "cancelled" : "completed";
     return { id: metadata.conversationId, workspaceId, engine: "legacy-ao", name: metadata.title ?? "", state,
-      events: [{ id: "ao-snapshot-metadata", sequence: 0, type: "ao.snapshot", data: { ...metadata, sourceCommit: AO_PIN } }, ...result] };
+      events: [{ id: "ao-snapshot-metadata", sequence: 0, type: "ao.snapshot", data: { ...metadata, turns, sourceCommit: AO_PIN } }, ...result] };
   });
   return { format: "orchestrator-finished-history", schemaVersion: 1, exportId: value.exportId, conversations, blobs };
 }

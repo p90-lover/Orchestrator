@@ -16,6 +16,7 @@ FR-8 and FR-9. Explicit offline history import, engine affinity, reversible cuto
 4. WHEN those gates fail or remain unknown THEN AO SHALL remain available for existing sessions and the app SHALL not claim removal.
 5. WHEN AO removal ships THEN the app package SHALL contain no AO daemon, renderer, build step or live storage dependency.
 6. WHEN importing an operator-supplied capture of finished legacy AO snapshot pages THEN the importer SHALL validate the pinned wire format and complete cursor chain before writing, preserve original IDs, event ordering and payloads, and reject changed, running, truncated, branched or missing-blob captures rather than pretending they migrated.
+7. WHEN the operator identifies an already authorized isolated AO endpoint and one finished session THEN the capture command SHALL use only bounded read-only snapshot requests to the specified loopback address, preserve the original snapshot pages, and create a new export only after validation. It SHALL NOT discover or start a daemon, read a database directly, follow a redirect, or overwrite an existing file.
 
 ## Offline archive contract
 

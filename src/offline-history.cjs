@@ -208,4 +208,4 @@ function exportOfflineHistory({ dataRoot, exportId, includeInactive = false }) {
   } finally { db.close(); }
 }
 
-module.exports = { importOfflineHistory, rollbackOfflineHistory, readOfflineHistory, exportOfflineHistory };
+module.exports = { importOfflineHistory, rollbackOfflineHistory, readOfflineHistory, exportOfflineHistory, validateExport };
