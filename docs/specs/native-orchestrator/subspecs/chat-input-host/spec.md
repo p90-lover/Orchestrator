@@ -21,6 +21,7 @@ Own FR-10: durable draft revisions, attachment ownership, submitted-input receip
 9. WHEN typing continues THEN writes SHALL be coalesced for 250 ms with a 500 ms maximum wait, and the UI SHALL distinguish saving, saved and not saved.
 10. WHEN a draft is restored THEN it SHALL not be automatically sent to a model.
 11. WHEN Coding Tools dispatches a saved native steer THEN it SHALL durably bind the chosen workspace, task, run, native session and turn to the saved input before sending guidance. WHEN the host loses the reply THEN receipt recovery SHALL use a read-only lookup of that binding, even after restart or a change of active turn; only a matching accepted native receipt may settle the input.
+12. WHEN more saved inputs exist than fit on one recovery page THEN the composer SHALL expose a bounded next page and a way back to the first page. Invalid cursor/scope or a failed page read SHALL be visible rather than silently appearing complete. Paging SHALL NOT dispatch, cancel or change any input, and a result for one composer SHALL NOT appear in another.
 
 ## 涉及文件
 

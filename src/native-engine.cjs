@@ -196,8 +196,8 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       if (value.status === "unknown" || value.recoveryRequired) {
         return { ...value, replayed: false, recovery: "unresolved" };
       }
-      schedule(id);
-      const isQueued = value.turnState === "queued";
+      const isQueued = value.turnState === "queued" && value.turnId === turnId;
+      if (isQueued) schedule(id);
       return { ...value, replayed: false, recovery: isQueued ? "scheduled" : "observed" };
     },
     async resolveApproval(id, turnId, requestId, decision, workspaceId) {

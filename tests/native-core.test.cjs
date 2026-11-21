@@ -132,9 +132,11 @@ test("queued recovery executes queued work only under explicit engine.recover an
     async cancel() {},
   };
 
-  // Step 1: Open engine, send turn, close engine before it is claimed
-  let store = await openNativeStore({ dataRoot });
+  const store = await openNativeStore({ dataRoot });
   const session = await store.call("create", { workspaceId: "workspace", harness: "fixture", root: __dirname });
+  const previous = await store.call("enqueue", { id: session.id, prompt: "already finished", clientMessageId: "finished" });
+  await store.call("claim", { id: session.id });
+  await store.call("settle", { id: session.id, turnId: previous.id, state: "completed" });
   const turnA = await store.call("enqueue", { id: session.id, prompt: "first-queued", clientMessageId: "c-1" });
   await store.close();
 
@@ -144,8 +146,11 @@ test("queued recovery executes queued work only under explicit engine.recover an
 
   const observed = await engine.observe(session.id, turnA.id);
   assert.equal(observed.turnState, "queued");
+  assert.equal((await engine.recover(session.id, previous.id)).recovery, "observed");
+  assert.equal((await engine.recover(session.id)).recovery, "observed");
   await pause(100);
-  assert.equal(runs.length, 0); // No automatic claim
+  assert.equal((await engine.observe(session.id, turnA.id)).turnState, "queued");
+  assert.deepEqual(runs, []);
 
   // Step 3: Explicit recover schedules the queued turn
   const recovered = await engine.recover(session.id, turnA.id);

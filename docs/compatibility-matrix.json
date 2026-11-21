@@ -27,6 +27,14 @@
           "result": "Exactly one fixture dispatch after recovery; newer text was preserved. No model or installed app was used.",
           "environment": "Coding Tools Preview, deterministic fixture dispatch.",
           "verifiedAt": "2026-11-21"
+        },
+        {
+          "source": "coding-tools-mcp@1744cda35ddc6b87c7f26998371c904c11b98875",
+          "command": "node --test --test-isolation=none --test-concurrency=1 --test-name-pattern='pending pages|a lost acceptance response|a saved input|accepted input with|accepted delivery failure|queued saved input' desktop-electron/tests/chat-input-client.test.cjs desktop-electron/tests/chat-input-store.test.cjs desktop-electron/tests/chat-input-delivery.test.cjs; desktop Electron TypeScript --noEmit --incremental false",
+          "scope": "Actual journal with 26 inputs and an abruptly terminated isolated worker after a committed dispatch claim. Later unknown input is discoverable after reopening; other workspaces/composers excluded, bad cursor and duplicate ID page rejected. No renderer or OS reboot was performed.",
+          "result": "6 focused tests and TypeScript passed; exit 0. Renderer wiring preserves scope and stores only one page. Final UI interaction still needs a supported canary.",
+          "environment": "Node 26.12.1 on Windows, disposable SQLite, no model or installed app used.",
+          "verifiedAt": "2026-11-21"
         }
       ]
     },
@@ -62,6 +70,14 @@
           "scope": "Native restart, bounded stream flushing, queue barriers and exact turn cancellation under synthetic drivers. Abrupt live app/daemon exit, actual process reattachment and slow-disk replay are unverified.",
           "result": "Windows and Linux jobs passed on the exact native code head.",
           "environment": "Node 22 CI, disposable product state and fixture drivers.",
+          "verifiedAt": "2026-11-21"
+        },
+        {
+          "source": "Orchestrator native-engine.cjs blob c2fb941825007042284b570f049c49d463313e17; native-core.test.cjs blob dc4749e19acf839c0f2930904306f195ff2e72b6",
+          "command": "node --test --test-isolation=none --test-concurrency=1 --test-name-pattern='queued recovery executes|ambiguous driver outcomes|host recover never dispatches' tests/native-core.test.cjs tests/native-runtime-adapter.test.cjs",
+          "scope": "Read-only recovery of a finished or unnamed turn must not wake unrelated queued work. Explicit identity permits scheduling the safe queue; an unknown turn remains a barrier and host recovery stays read-only.",
+          "result": "Expected baseline failure (scheduled vs observed), then 3 focused tests passed; exit 0.",
+          "environment": "Node 26.12.1 on Windows, isolated native store and deterministic drivers.",
           "verifiedAt": "2026-11-21"
         }
       ]

@@ -13,7 +13,7 @@ Own FR-1, FR-2, FR-3: durable sessions, bounded serialized turns, command dedupl
 1. WHEN a new turn is acknowledged THEN the system SHALL have durably stored its session, client ID, content digest and queued state.
 2. WHEN the same client ID and content are submitted again THEN the system SHALL return the same turn without a second dispatch; different content SHALL fail.
 3. WHEN a session has active work THEN subsequent turns SHALL queue in order within a configured capacity.
-4. WHEN the coordinator restarts THEN it SHALL preserve never-claimed turns as queued, mark previously running turns unknown, and refuse dispatch past an unknown turn; explicit recovery MAY schedule queued work only when no unknown turn blocks it. Historical unknown turns SHALL NOT be reinterpreted as safe to resend.
+4. WHEN the coordinator restarts THEN it SHALL preserve never-claimed turns as queued, mark previously running turns unknown, and refuse dispatch past an unknown turn; explicit recovery MAY schedule the safe session queue only when the caller identifies a queued turn and no unknown turn blocks it. A terminal-turn lookup or a recovery query without an exact turn identity SHALL remain read-only. Historical unknown turns SHALL NOT be reinterpreted as safe to resend.
 8. WHEN streaming text is received THEN it SHALL be committed in bounded batches within 100 ms or 16 KiB and flushed before terminal state; write failure SHALL propagate without a success acknowledgement.
 5. WHEN a client reads events THEN it SHALL receive a bounded ordered page and continuation cursor without loading all history.
 6. WHEN storage fails THEN command acceptance SHALL fail and no driver shall be invoked for that command.
