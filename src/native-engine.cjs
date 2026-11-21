@@ -117,11 +117,43 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
     }
   }
 
+  async function steerTurn(id, turnId, prompt, clientMessageId, workspaceId) {
+    const { session } = await store.call("observe", { id, turnId });
+    if (session.workspace_id !== workspaceId) throw failure("WORKSPACE_SCOPE", "Steer belongs to a different workspace");
+    const driver = available.get(session.harness);
+    if (driver?.capabilities?.steering !== true || typeof driver.steer !== "function") {
+      throw failure("NATIVE_CAPABILITY_UNSUPPORTED", "This native driver does not support steering");
+    }
+    const scope = { id, turnId, clientMessageId };
+    const reserved = await store.call("reserveSteer", { ...scope, prompt });
+    const receipt = (state, duplicate = false) => {
+      if (state === "accepted") return { steered: true, turnId, inputId: clientMessageId, duplicate };
+      if (state === "not_sent") return { steered: false };
+      throw failure("STEER_DELIVERY_UNKNOWN", "Steer delivery is unconfirmed; do not replay or send it as a new turn");
+    };
+    if (reserved.duplicate || reserved.state !== "dispatching") return receipt(reserved.state, reserved.duplicate);
+    let state = "not_sent";
+    const slot = active.get(id);
+    if (!closed && slot?.turn?.id === turnId && !slot.cancellation && !slot.controller.signal.aborted) {
+      state = "unknown";
+      try {
+        const result = await driver.steer({ sessionId: id, turnId, text: prompt, clientMessageId });
+        if (result?.steered === true && result.turnId === turnId) state = "accepted";
+        else if (result?.steered === false && result.dispatched === false) state = "not_sent";
+      } catch { /* A provider-side error does not prove the steer was never applied. */ }
+    }
+    await store.call("finishSteer", { ...scope, state });
+    if (state === "accepted") notify(id);
+    return receipt(state);
+  }
+
   const engine = {
     capabilities() {
-      return { engine: "orchestrator-native", schemaVersion: 2, productionReady: false,
-        supported: ["sessions", "durable-turns", "deduplication", "queued-send", "text-output", "event-pages", "explicit-recovery", "cancellation"],
-        missing: ["live-harness-parity", "tool-approvals", "input-questions", "steering", "compaction", "offline-AO-import", "Coding-Tools-cutover"],
+      const steering = [...available.values()].some(driver => driver.capabilities?.steering === true && typeof driver.steer === "function");
+      return { engine: "orchestrator-native", schemaVersion: 3, productionReady: false,
+        supported: ["sessions", "durable-turns", "deduplication", "queued-send", "text-output", "event-pages", "explicit-recovery", "cancellation",
+          ...(steering ? ["turn-scoped-steering"] : [])],
+        missing: ["live-harness-parity", "tool-approvals", "input-questions", "live-steering-parity", "compaction", "offline-AO-import", "Coding-Tools-cutover"],
         drivers: [...available.keys()] };
     },
     async createSession({ id = randomUUID(), workspaceId, harness, root, name = "", config = {} }) {
@@ -135,6 +167,13 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       const accepted = await store.call("enqueue", { id, prompt, clientMessageId, capacity: queueCapacity });
       if (accepted.state === "queued") schedule(id);
       return { turnId: accepted.id, state: accepted.state, duplicate: accepted.duplicate === true };
+    },
+    async steer(id, turnId, prompt, clientMessageId, workspaceId) {
+      checkOpen();
+      if (!turnId || !clientMessageId || !workspaceId) throw failure("STEER_SCOPE_REQUIRED", "Choose the exact workspace, turn and input identity to steer");
+      const work = steerTurn(id, turnId, prompt, clientMessageId, workspaceId);
+      jobs.add(work);
+      try { return await work; } finally { jobs.delete(work); }
     },
     async observe(id, turnId = null) {
       checkOpen();

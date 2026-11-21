@@ -16,6 +16,18 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
     turn.writes = Promise.all([turn.writes, write]).then(() => undefined);
     turn.writes.catch(error => { turn.outputFailed = true; turn.reject(error); });
   }
+  function receiveTurnEvent(turn, method, params) {
+    if (turn.ended) return;
+    if (method === "item/agentMessage/delta" && typeof params.delta === "string") {
+      writeDelta(turn, params.delta);
+    } else if (method === "turn/completed") {
+      turn.ended = true;
+      turn.writes.then(() => {
+        if (params.turn?.status === "completed") turn.resolve();
+        else turn.reject(failure("HARNESS_TURN_FAILED", "Harness turn did not complete"));
+      }, turn.reject);
+    }
+  }
   async function connection(session) {
     if (closed) throw failure("DRIVER_CLOSED", "Native driver has closed");
     if (lostSessions.has(session.id)) throw failure("SESSION_REATTACH_REQUIRED", "The previous harness thread cannot be safely reattached by this prototype");
@@ -36,14 +48,7 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
           const providerId = params.turnId ?? params.turn?.id;
           if (!turn.providerId) { if (turn.early.length >= 128) throw failure("PROTOCOL_LIMIT", "Too many early turn events"); turn.early.push([method, params]); return; }
           if (providerId !== turn.providerId) return;
-          if (method === "item/agentMessage/delta" && typeof params.delta === "string") {
-            writeDelta(turn, params.delta);
-          } else if (method === "turn/completed") {
-            turn.writes.then(() => {
-              if (params.turn?.status === "completed") turn.resolve();
-              else turn.reject(failure("HARNESS_TURN_FAILED", "Harness turn did not complete"));
-            }, turn.reject);
-          }
+          receiveTurnEvent(turn, method, params);
         },
       });
       try {
@@ -61,7 +66,7 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
     return pending;
   }
   return Object.freeze({
-    capabilities: Object.freeze({ sandbox: "read-only", interactiveApprovals: false, resumeAfterRestart: false, productionReady: false }),
+    capabilities: Object.freeze({ sandbox: "read-only", interactiveApprovals: false, steering: true, resumeAfterRestart: false, productionReady: false }),
     async run({ session, turn: localTurn, signal, emitText }) {
       const state = await connection(session);
       if (signal.aborted) return;
@@ -79,8 +84,7 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
         turn.providerId = response.turn.id;
         for (const [method, params] of turn.early) {
           if ((params.turnId ?? params.turn?.id) !== turn.providerId) continue;
-          if (method === "item/agentMessage/delta" && typeof params.delta === "string") writeDelta(turn, params.delta);
-          if (method === "turn/completed") turn.writes.then(() => params.turn?.status === "completed" ? resolve() : reject(failure("HARNESS_TURN_FAILED", "Harness turn did not complete")), reject);
+          receiveTurnEvent(turn, method, params);
         }
         await finished;
         await turn.writes;
@@ -95,6 +99,17 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
         }
         throw error;
       } finally { signal.removeEventListener("abort", abort); if (state.turn === turn) state.turn = null; }
+    },
+    async steer({ sessionId, turnId, text, clientMessageId }) {
+      const state = await connections.get(sessionId);
+      const turn = state?.turn;
+      if (!turn?.providerId || turn.localId !== turnId || turn.ended || closed) return { steered: false, dispatched: false };
+      const response = await state.client.request("turn/steer", {
+        threadId: state.threadId, expectedTurnId: turn.providerId, clientUserMessageId: clientMessageId,
+        input: [{ type: "text", text, text_elements: [] }],
+      });
+      if (response?.turnId !== turn.providerId) throw failure("INVALID_PROTOCOL", "Steer receipt does not identify the original provider turn");
+      return { steered: true, turnId };
     },
     async cancel({ sessionId, turnId }) {
       const state = await connections.get(sessionId);

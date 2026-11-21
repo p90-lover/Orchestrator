@@ -12,7 +12,7 @@ Coding Tools host -> versioned handler -> native coordinator -> explicit driver 
 
 ## Data model
 
-Sessions contain stable ID, workspace ID, harness ID, state and created/updated timestamps. Turns contain session ID, local turn ID, client request ID, request content hash, state, answer and error. Event rows use a global increasing sequence, session/turn identity and bounded JSON payload. Requests with the same client ID and different content fail. Schema version is checked before any migration/write.
+Sessions contain stable ID, workspace ID, harness ID, state and created/updated timestamps. Turns contain session ID, local turn ID, client request ID, request content hash, state, answer and error. Event rows use a global increasing sequence, session/turn identity and bounded JSON payload. Requests with the same client ID and different content fail. Schema version is checked before any migration/write. Schema 3 adds bounded steer receipts keyed by session and client input ID, bound to the exact local turn. `dispatching` is committed before sending provider guidance and becomes `unknown` after restart. Only a confirmed non-dispatch permits ordinary send with that same input ID and content. Older readers must refuse schema 3; packaged rollback is not proven by this additive migration.
 
 ## Lifecycle
 

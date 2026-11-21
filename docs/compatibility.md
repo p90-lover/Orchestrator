@@ -8,7 +8,7 @@ These checks establish **handler forwarding and interface compatibility**. They 
 
 ## Native-engine cutover matrix
 
-Every row is required before a replacement engine becomes the default. Version 0.2.0-alpha.1 has isolated prototype coverage for acceptance, deduplication, turn cancellation, event paging and conservative restart recovery, plus a read-only Codex protocol adapter. **No row below is certified for production cutover.** The [MCP plugin check](native-plugin.md) verifies a tool integration, not replacement of the host's chat runtime. Legacy AO remains the production path.
+Every row is required before a replacement engine becomes the default. Version 0.2.0-alpha.1 has isolated prototype coverage for acceptance, deduplication, turn cancellation, event paging and conservative restart recovery, plus a read-only Codex protocol adapter. The isolated host workflow probe also verifies Codex steering with exact native and provider turn identities, bounded schema-3 receipts and no replay after an uncertain acknowledgement. It uses fixture inference; interactive approvals and real provider turns are not covered. **No row below is certified for production cutover.** The [MCP plugin check](native-plugin.md) verifies a tool integration, not replacement of the host's chat runtime. Legacy AO remains the production path.
 
 | Area | Required evidence |
 | --- | --- |

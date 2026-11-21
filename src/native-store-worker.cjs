@@ -10,6 +10,8 @@ const { sessionConfig } = require("./session-config.cjs");
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const VALID_SETTLE_STATES = new Set(["completed", "failed", "cancelled", "unknown"]);
 const MAX_TEXT = 1024 * 1024;
+const MAX_STEERS_PER_SESSION = 256;
+const STEER_RESULTS = new Set(["accepted", "not_sent", "unknown"]);
 let db;
 let owner;
 const fail = (code, message) => Object.assign(new Error(message), { code });
@@ -84,6 +86,10 @@ const operations = {
         if (previous.digest !== digest) throw fail("IDEMPOTENCY_CONFLICT", "Client message ID belongs to different input");
         return { ...previous, duplicate: true };
       }
+      const steer = query("SELECT state,digest FROM steers WHERE session_id=? AND client_id=?", id, clientMessageId);
+      if (steer && (steer.state !== "not_sent" || steer.digest !== digest)) {
+        throw fail("IDEMPOTENCY_CONFLICT", "This input belongs to a steer and cannot be sent as a new turn");
+      }
       if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100) throw fail("INVALID_CAPACITY", "Queue capacity must be 1-100");
       const queued = query("SELECT COUNT(*) AS count FROM turns WHERE session_id=? AND state IN ('queued','running','unknown')", id).count;
       if (queued >= capacity) throw fail("QUEUE_FULL", "Session queue is full");
@@ -92,6 +98,39 @@ const operations = {
       settleSession(id);
       event(id, turnId, "turn.accepted");
       return turn(id, turnId);
+    });
+  },
+  reserveSteer({ id, turnId, prompt, clientMessageId }) {
+    identifier(clientMessageId); text(prompt, 32768);
+    if (!prompt.trim()) throw fail("INVALID_INPUT", "Message must not be empty");
+    const digest = createHash("sha256").update(prompt).digest("hex");
+    return transaction(() => {
+      const current = turn(id, turnId);
+      if (!current) throw fail("TURN_NOT_FOUND", "Turn does not belong to this session");
+      const previous = query("SELECT digest,turn_id,state FROM steers WHERE session_id=? AND client_id=?", id, clientMessageId);
+      if (previous) {
+        if (previous.digest !== digest || previous.turn_id !== turnId) throw fail("IDEMPOTENCY_CONFLICT", "The steer ID belongs to a different input or turn");
+        return { state: previous.state, duplicate: true };
+      }
+      if (current.state !== "running") return { state: "not_sent" };
+      if (query("SELECT 1 FROM turns WHERE session_id=? AND client_id=?", id, clientMessageId)) {
+        throw fail("IDEMPOTENCY_CONFLICT", "This input already belongs to an accepted turn");
+      }
+      const count = query("SELECT COUNT(*) AS count FROM steers WHERE session_id=?", id).count;
+      if (count >= MAX_STEERS_PER_SESSION) throw fail("STEER_LIMIT", "This session cannot store more steer receipts");
+      run("INSERT INTO steers(session_id,client_id,turn_id,digest,prompt,state) VALUES(?,?,?,?,?,'dispatching')", id, clientMessageId, turnId, digest, prompt);
+      return { state: "dispatching" };
+    });
+  },
+  finishSteer({ id, turnId, clientMessageId, state }) {
+    identifier(clientMessageId);
+    if (!STEER_RESULTS.has(state)) throw fail("INVALID_STATE", "Invalid steer outcome");
+    return transaction(() => {
+      const row = query("SELECT turn_id,state,prompt FROM steers WHERE session_id=? AND client_id=?", identifier(id), clientMessageId);
+      if (!row || row.turn_id !== turnId || row.state !== "dispatching") throw fail("STEER_RECEIPT_CONFLICT", "There is no matching unsettled steer");
+      run("UPDATE steers SET state=? WHERE session_id=? AND client_id=?", state, id, clientMessageId);
+      if (state === "accepted") event(id, turnId, "steer.accepted", { clientMessageId, text: row.prompt });
+      return { state };
     });
   },
   claim({ id }) {
@@ -177,17 +216,18 @@ try {
       throw fail("DATABASE_CORRUPT", "Database header is invalid");
     }
     version = row.user_version;
-    if (version === 1 || version === 2) {
+    if ([1, 2, 3].includes(version)) {
       db.prepare("SELECT id,workspace_id,harness,root,name,state,created_at,updated_at FROM sessions LIMIT 0").all();
       db.prepare("SELECT ordinal,id,session_id,client_id,digest,prompt,state,answer,error,created_at,updated_at FROM turns LIMIT 0").all();
       db.prepare("SELECT sequence,session_id,turn_id,type,payload,created_at FROM events LIMIT 0").all();
-      if (version === 2) db.prepare("SELECT config FROM sessions LIMIT 0").all();
+      if (version >= 2) db.prepare("SELECT config FROM sessions LIMIT 0").all();
+      if (version >= 3) db.prepare("SELECT session_id,client_id,turn_id,digest,prompt,state FROM steers LIMIT 0").all();
     }
   } catch (err) {
     if (err.code === "DATABASE_CORRUPT") throw err;
     throw fail("DATABASE_CORRUPT", `Database header or schema check failed: ${err.message}`);
   }
-  if (![0, 1, 2].includes(version)) throw fail("SCHEMA_UNSUPPORTED", "Native store schema is newer than this runtime");
+  if (![0, 1, 2, 3].includes(version)) throw fail("SCHEMA_UNSUPPORTED", "Native store schema is newer than this runtime");
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000");
   if (version === 0) transaction(() => {
     db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,harness TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -199,7 +239,15 @@ try {
   if (version < 2) transaction(() => {
     db.exec("ALTER TABLE sessions ADD COLUMN config TEXT NOT NULL DEFAULT '{}'; PRAGMA user_version=2;");
   });
+  if (version < 3) transaction(() => {
+    db.exec(`CREATE TABLE steers(
+      session_id TEXT NOT NULL REFERENCES sessions(id), client_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL REFERENCES turns(id), digest TEXT NOT NULL, prompt TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('dispatching','accepted','unknown','not_sent')),
+      PRIMARY KEY(session_id,client_id)); PRAGMA user_version=3;`);
+  });
   transaction(() => {
+    run("UPDATE steers SET state='unknown' WHERE state='dispatching'");
     const running = db.prepare("SELECT id,session_id FROM turns WHERE state='running'").all();
     const touchedSessions = new Set();
     for (const item of running) {

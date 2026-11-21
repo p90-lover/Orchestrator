@@ -133,6 +133,9 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       if (!await harness.continuable(id)) throw fail("NATIVE_REATTACH_REQUIRED", "The original provider conversation cannot be safely reattached by this driver");
       return live().send(internalId(id), text, clientMessageId);
     },
+    async steer(id, text, clientMessageId, { turnId, workspaceId } = {}) {
+      return live().steer(internalId(id), turnId, text, clientMessageId, workspaceId);
+    },
     async interrupt(id, options = {}) {
       const turnId = typeof options === "string" ? options : options.turnId ?? options.expectedTurn;
       if (!turnId) throw fail("TURN_ID_REQUIRED", "Native interruption requires the exact turn identity");
