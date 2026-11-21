@@ -10,12 +10,13 @@ FR-4 and FR-5. Direct documented harness protocols, explicit capabilities, scope
 
 ## Acceptance (EARS)
 
-1. WHEN a harness is opened THEN the adapter SHALL use an explicit absolute executable, argv array and scoped environment, not shell interpolation.
+1. WHEN a subprocess harness is opened THEN the adapter SHALL use an explicit absolute executable, argv array and scoped environment, not shell interpolation.
 2. WHEN a requested capability is unsupported THEN launch SHALL fail before external work.
 3. WHEN a tool approval arrives THEN its decision SHALL be scoped to session, turn and request, including denial rationale.
 4. WHEN a process exits or loses its protocol stream THEN active work SHALL settle as failed/unknown, not completed or silently retried.
 5. WHEN a session is stopped THEN only its owned child process tree SHALL be terminated.
 6. WHEN a supported driver steers a running native turn THEN it SHALL use the exact session, active provider turn and stable input identity, without starting a follow-up turn. An idempotent duplicate returns a known receipt without contacting the driver; a lost or mismatched acknowledgement SHALL remain unknown and SHALL NOT be retried or converted into a follow-up automatically.
+7. WHEN the host embeds the experimental Pi harness THEN it SHALL supply the exact model and an explicit host-owned runtime, use in-memory settings and sessions with no resource discovery, and refuse enabled tools before executing a prompt. It SHALL NOT promise approval, tool, steering, or restart parity for this text-only route.
 
 ## 涉及文件
 

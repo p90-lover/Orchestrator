@@ -8,7 +8,7 @@ These checks establish **handler forwarding and interface compatibility**. They 
 
 ## Native-engine cutover matrix
 
-Every row is required before a replacement engine becomes the default. Version 0.2.0-alpha.1 has isolated prototype coverage for acceptance, deduplication, turn cancellation, event paging and conservative restart recovery, plus a read-only Codex protocol adapter. The isolated host workflow probe also verifies Codex steering with exact native and provider turn identities, bounded schema-3 receipts and no replay after an uncertain acknowledgement. It uses fixture inference; interactive approvals and real provider turns are not covered. **No row below is certified for production cutover.** The [MCP plugin check](native-plugin.md) verifies a tool integration, not replacement of the host's chat runtime. Legacy AO remains the production path.
+Every row is required before a replacement engine becomes the default. Version 0.2.0-alpha.1 has isolated prototype coverage for acceptance, deduplication, turn cancellation, event paging and conservative restart recovery, plus a read-only Codex protocol adapter. The isolated host workflow probe also verifies Codex steering with exact native and provider turn identities, bounded schema-3 receipts and no replay after an uncertain acknowledgement. That probe uses fixture inference; interactive approvals and real provider turns are not covered. The separate embedded Pi experiment ran the installed Pi SDK through the real host factory and workflow with an isolated loopback fixture, using in-memory settings, sessions and credentials and no tool discovery. Only the native engine's product SQLite files were written in the probe. It proves a subprocess-free, log-free text transport for that configuration, not real model behavior, interactive approvals or native product parity. **No row below is certified for production cutover.** The [MCP plugin check](native-plugin.md) verifies a tool integration, not replacement of the host's chat runtime. Legacy AO remains the production path.
 
 | Area | Required evidence |
 | --- | --- |
@@ -31,6 +31,10 @@ Every row is required before a replacement engine becomes the default. Version 0
 The authoritative required lists are `RUNTIME_METHODS` and `HARNESS_METHODS` in `src/orchestrator-handler.cjs`. The real-checkout probe verifies the required inventory and reports known optional methods. Handler 0.1.1 adds optional `busyChatSessions` for the host's autonomous-turn discovery. Engines that have it keep the original receiver and result; older engines can omit it. An additional upstream method requires a deliberate contract decision and conformance coverage in both repositories.
 
 Version 1 retains the legacy method signatures and opaque operation payloads. It is not yet a serialized wire schema. Any native implementation must freeze fixtures for arguments, return shapes, terminal states and error codes before claiming semantic parity. Never infer compatibility solely from an object having function properties.
+
+## Embedded Pi canary
+
+`node scripts/check-native-pi.cjs <absolute Coding Tools checkout> <absolute installed Pi SDK package directory>` reuses a trusted installed `@earendil-works/pi-coding-agent` 1.5.0 and its nested `pi-ai` dependency. It does not install a package or run a harness subprocess. The test passes only a synthetic credential to its own IPv4 loopback model-protocol fixture. The SDK uses the approved model, no discovered tools, and no automatic retry, catalog refresh, cache warming or compaction. The driver allows one matching provider request in each turn and requires an authoritative completed text response. Tests inspect the task-local tree after both chat turns to verify there are no harness files, then remove it. A real provider, tool grants, approval, steering, restart reattachment and packaging need separate verification. This is not registered in installed Coding Tools.
 
 ## Reproducibility
 
