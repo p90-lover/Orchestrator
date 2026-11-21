@@ -31,13 +31,20 @@ Coding Tools `docs/fixes/ao-stability-plan-2026-11-11.md` commit `8381ac730` exp
 
 Coding Tools [PR1214](https://github.com/p90-lover/coding-tools-mcp/pull/1214), branch `fix/ao-start-wait-live`, head `ee01d6075a5481f6f9ae572066c87b21eda9cf9f`, was independently checked **OPEN** during this continuation. Do not describe every historical stability proposal as merged or released.
 
+## Incident-to-regression follow-through
+
+- The host input work on [draft #1326](https://github.com/p90-lover/coding-tools-mcp/pull/1326) is distinct from the published baseline. The code checkpoints for this evidence are Coding Tools `9b2636a9f21e316a7d9b9005411fb31c0226c47a` and Orchestrator `e755068915e710fab8ea1825b9dd6c1c90d493ea`, with older exact fixture runs recorded separately.
+- **Input acknowledgement and draft loss:** the journal tests cover revision conflicts, owned attachments and accepted-input receipts. The isolated composer reproduced a lost acknowledgement that previously became a second editable input; the corrected path retained the original ID and the newer draft separately. Matrix: `input-durability`, `delivery`.
+- **Uncertain delivery and cancellation:** the native probe reproduced a missing launch reservation ID and later recovered an accepted steer exactly after both stores reopened. A false provider acknowledgement remained unknown, and cancellation without an owned turn did not release queued work. Matrix: `delivery`, `native-recovery` and `process-and-workspace`. A local store lock is not proof against PID reuse or unsafe descendant termination.
+- **Approval and boundedness:** the approved fixture tool once reopened a stale confirmation dialog. A fresh native status read now prevents it, and the driver still rejects the consumed request. Denial/expiry and main-thread I/O checks have scoped receipts. Slow-disk startup, retention under pressure and real permission-mode parity remain open. Matrix: `permissions`, `performance`.
+
 ## Compatibility and evidence limits
 
-- The companion MCP plugin uses a deterministic fixture, not a real model. Its success cannot certify native chat routing.
+- Authenticated HTTP registration and plugin discovery passed in an isolated real Codex harness, without a model request. The no-subprocess Pi canary exercised the real SDK and Coding Tools workflow with a deterministic provider. Neither certifies installed native chat, actual inference, general tool grants or production cutover.
 - The previous supported computer-control path excluded the host app's own window. No installed-chat registration receipt exists. Do not replace that missing gate with private API/settings edits.
 - No live `ao.db` was read or copied. Historical raw diagnostic output is not available in this register and must not be fabricated.
-- Current native graph has callback/value-reference lower-bound limitations. Host scoped index misses workflow/draft/queue symbols. An empty graph result is not permission to change a shared contract without confirming references.
-- Source fixes, published releases and verified installed behavior are separate statuses. Each new receipt must name exact source, command, result and environment assumptions.
+- Historical graph outputs were scoped and could miss callbacks or cross-language references. Follow current workspace policy: trace callers in source, inspect the scoped diff, and retain focused verification. Do not treat a historical graph result as a release or security pass.
+- Source fixes, published releases and verified installed behavior are separate statuses. Each receipt names its source, command, result and environment. A passing scoped receipt in a pending area does not change that area's status.
 
 ## Acceptance
 

@@ -8,18 +8,140 @@
   "receiptFields": ["source", "command", "scope", "result", "environment", "verifiedAt"],
   "completionRule": "Every required area must pass on the integrated candidate; synthetic tests do not substitute for live chat, migration, rollback or packaged provenance.",
   "areas": [
-    { "id": "input-durability", "required": true, "status": "pending", "scenarios": ["input_ack_requires_committed_revision", "stale_revision_preserves_newer_draft", "send_preserves_newer_typing", "continuous_typing_max_wait", "attachment_survives_source_removal", "write_failure_is_visible", "no_silent_truncation_or_eviction", "legacy_import_is_idempotent"], "receipts": [] },
-    { "id": "delivery", "required": true, "status": "pending", "scenarios": ["same_id_same_payload_returns_receipt", "same_id_changed_payload_conflicts", "task_and_run_linkage_is_atomic", "lost_reply_reuses_exact_receipt", "unknown_delivery_is_not_replayed", "repeated_equal_text_remains_distinct"], "receipts": [] },
-    { "id": "native-recovery", "required": true, "status": "pending", "scenarios": ["queued_restart_preserves_safe_work", "running_restart_remains_unknown", "unknown_turn_blocks_followups", "historical_unknown_is_not_reclassified", "explicit_recover_resumes_only_safe_queue", "terminal_waits_for_text_commit"], "receipts": [] },
+    {
+      "id": "input-durability", "required": true, "status": "pending",
+      "scenarios": ["input_ack_requires_committed_revision", "stale_revision_preserves_newer_draft", "send_preserves_newer_typing", "continuous_typing_max_wait", "attachment_survives_source_removal", "write_failure_is_visible", "no_silent_truncation_or_eviction", "legacy_import_is_idempotent"],
+      "receipts": [
+        {
+          "source": "coding-tools-mcp@d444f418881ecebbc1b50cd58f0d77c2f56c054a",
+          "command": "node --test --test-isolation=none --test-concurrency=1 desktop-electron/tests/chat-input-client.test.cjs desktop-electron/tests/chat-input-store.test.cjs desktop-electron/tests/chat-input-service.test.cjs desktop-electron/tests/chat-input-workflow.test.cjs desktop-electron/tests/chat-attachment-store.test.cjs",
+          "scope": "Worker journal, revisions, attachment preservation, queue edit and host wiring; historical commit, not current whole-app qualification.",
+          "result": "40 tests passed; exit 0.",
+          "environment": "Node 26, isolated SQLite and synthetic attachments.",
+          "verifiedAt": "2026-11-17"
+        },
+        {
+          "source": "coding-tools-mcp@1505988152bdf3cc7d600884b6bce5def51d8ef2",
+          "command": "node input-preview.mjs; isolated composer interaction and renderer reload",
+          "scope": "Actual composer with an isolated SQLite journal, lost acknowledgement, newer typing and saved receipt (sbx-wQLZRZD0FtSE). The pending UI shows a bounded first page; complete outbox discoverability and installed-chat recovery are not certified.",
+          "result": "Exactly one fixture dispatch after recovery; newer text was preserved. No model or installed app was used.",
+          "environment": "Coding Tools Preview, deterministic fixture dispatch.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    },
+    {
+      "id": "delivery", "required": true, "status": "pending",
+      "scenarios": ["same_id_same_payload_returns_receipt", "same_id_changed_payload_conflicts", "task_and_run_linkage_is_atomic", "lost_reply_reuses_exact_receipt", "unknown_delivery_is_not_replayed", "repeated_equal_text_remains_distinct"],
+      "receipts": [
+        {
+          "source": "coding-tools-mcp@9d02569f411efc6c4bcffc0bfe79517a85a02318; Orchestrator@616347bd4af62c3efa663c2a19386356f59fddd3",
+          "command": "node scripts/check-native-coding-tools.cjs <Coding Tools checkout>",
+          "scope": "Real host factory, outbox and native receipt readback across both stores reopening. Same text with different IDs remains distinct; unknown delivery is not replayed. Headless and provider boundaries use fixtures.",
+          "result": "Exit 0, recoveredSteerAfterRestart=true. Matching accepted receipt settled; unconfirmed input remained unknown. No extra send, steer or current-run lookup.",
+          "environment": "Node 26, disposable host/native databases and in-process Codex protocol peer.",
+          "verifiedAt": "2026-11-21"
+        },
+        {
+          "source": "coding-tools-mcp@9b2636a9f21e316a7d9b9005411fb31c0226c47a",
+          "command": "GitHub Actions CI run 44891655939 and gh pr checks 1326",
+          "scope": "Integrated Electron and Rust suites including workflow and atomic task/run acceptance regressions in the host source. No live provider receipt asserted.",
+          "result": "All eight checks passed on the exact app head.",
+          "environment": "GitHub Actions; Windows/Linux/macOS as selected by the app CI.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    },
+    {
+      "id": "native-recovery", "required": true, "status": "pending",
+      "scenarios": ["queued_restart_preserves_safe_work", "running_restart_remains_unknown", "unknown_turn_blocks_followups", "historical_unknown_is_not_reclassified", "explicit_recover_resumes_only_safe_queue", "terminal_waits_for_text_commit"],
+      "receipts": [
+        {
+          "source": "Orchestrator@e755068915e710fab8ea1825b9dd6c1c90d493ea",
+          "command": "node --test --test-concurrency=1 tests/*.test.cjs (GitHub Actions run 44891644014)",
+          "scope": "Native restart, bounded stream flushing, queue barriers and exact turn cancellation under synthetic drivers. Abrupt live app/daemon exit, actual process reattachment and slow-disk replay are unverified.",
+          "result": "Windows and Linux jobs passed on the exact native code head.",
+          "environment": "Node 22 CI, disposable product state and fixture drivers.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    },
     { "id": "launch-and-drivers", "required": true, "status": "pending", "scenarios": ["freeze_supported_host_catalog", "each_harness_runs_without_AO", "model_effort_context_and_plain_prompt", "unsupported_capability_fails_before_launch", "warm_and_cold_start"], "receipts": [] },
     { "id": "provider-and-tools", "required": true, "status": "pending", "scenarios": ["explicit_account_route", "no_personal_auth_fallback", "credential_rotation_without_replay", "scoped_MCP_lease_renewal", "stdio_HTTP_SSE_tools", "workspace_boundary_and_optins"], "receipts": [] },
-    { "id": "permissions", "required": true, "status": "pending", "scenarios": ["all_supported_permission_modes", "approval_and_denial_rationale", "pending_request_outside_history_page", "stale_request_rejected", "reviewer_timeout_fails_closed", "input_questions"], "receipts": [] },
+    {
+      "id": "permissions", "required": true, "status": "pending",
+      "scenarios": ["all_supported_permission_modes", "approval_and_denial_rationale", "pending_request_outside_history_page", "stale_request_rejected", "reviewer_timeout_fails_closed", "input_questions"],
+      "receipts": [
+        {
+          "source": "coding-tools-mcp@9b2636a9f21e316a7d9b9005411fb31c0226c47a; Orchestrator@e755068915e710fab8ea1825b9dd6c1c90d493ea",
+          "command": "node scripts/check-native-pi.cjs <Coding Tools checkout> <installed Pi SDK> --approval-fixture",
+          "scope": "Actual Coding Tools approve_harness action with one inert tool, real SDK, and loopback fixture provider. No real-user dialog, shell/file tool, installed registration or real inference.",
+          "result": "Exit 0. Unscoped, wrong-workspace and stale requests failed; declined confirmation did not continue the model; one exact confirmed decision released the fixed test value.",
+          "environment": "Node 26, Pi SDK 1.5.0, in-memory harness and synthetic dialogue with no disk diagnostics.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    },
     { "id": "turn-control", "required": true, "status": "pending", "scenarios": ["send_queue_and_steer", "turn_scoped_interrupt", "stop_and_resume", "compaction", "no_cross_engine_retry"], "receipts": [] },
     { "id": "history-and-events", "required": true, "status": "pending", "scenarios": ["stable_ids_and_order", "tool_results_and_reasoning", "bounded_cursor_pages", "reconnect_and_duplicate_events", "cursor_expiry_snapshot", "image_blob_recovery"], "receipts": [] },
-    { "id": "process-and-workspace", "required": true, "status": "pending", "scenarios": ["PID_reuse", "owned_process_tree_only", "bounded_shutdown", "reattach_identity_and_capabilities", "folder_shared_worktree_modes", "safe_junction_cleanup"], "receipts": [] },
-    { "id": "performance", "required": true, "status": "pending", "scenarios": ["maintenance_yields_to_foreground_acceptance", "progressing_startup_is_not_restarted", "oversized_wal_does_not_block_listener_start", "chat_acceptance_does_not_block_main_loop", "busy_storage_does_not_claim_agent_exit", "history_replay_is_bounded_and_partitioned", "bounded_stream_memory_and_transactions"], "receipts": [] },
+    {
+      "id": "process-and-workspace", "required": true, "status": "pending",
+      "scenarios": ["PID_reuse", "owned_process_tree_only", "bounded_shutdown", "reattach_identity_and_capabilities", "folder_shared_worktree_modes", "safe_junction_cleanup"],
+      "receipts": [
+        {
+          "source": "Orchestrator@e755068915e710fab8ea1825b9dd6c1c90d493ea",
+          "command": "node --test --test-isolation=none --test-concurrency=1 tests/pi-driver.test.cjs tests/native-runtime-adapter.test.cjs",
+          "scope": "Wrong workspace rejected, exact turn cancellation, and no unsafe native continuation after reopening. This is not an OS process-tree, Windows PID reuse or worktree cleanup receipt.",
+          "result": "10 tests passed; exit 0.",
+          "environment": "Node 26, fixtures with isolated directories and no real subprocesses.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    },
+    {
+      "id": "performance", "required": true, "status": "pending",
+      "scenarios": ["maintenance_yields_to_foreground_acceptance", "progressing_startup_is_not_restarted", "oversized_wal_does_not_block_listener_start", "chat_acceptance_does_not_block_main_loop", "busy_storage_does_not_claim_agent_exit", "history_replay_is_bounded_and_partitioned", "bounded_stream_memory_and_transactions"],
+      "receipts": [
+        {
+          "source": "coding-tools-mcp@7c01bea757176ecda578298ec8829181fc3e323f",
+          "command": "node --test --test-isolation=none --test-concurrency=1 desktop-electron/tests/orchestrator-handler.test.cjs desktop-electron/tests/agent-orchestrator-lifecycle.test.cjs desktop-electron/tests/backend-bundle.test.cjs desktop-electron/tests/main-sync-calls.test.cjs",
+          "scope": "Main-thread I/O guard, mock lifecycle and bundle closure. No actual slow-disk latency, startup WAL size or long-term retention measured.",
+          "result": "72 tests passed; exit 0 (sbx-6ViVRKbqdJku).",
+          "environment": "Node 26, scoped fixture tests.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    },
     { "id": "host-product", "required": true, "status": "pending", "scenarios": ["single_chat", "teams_and_subagents", "goals_schedules_wakeups", "terminal_preview_computer_optins", "context_and_usage", "persistent_engine_affinity"], "receipts": [] },
-    { "id": "live-chat", "required": true, "status": "blocked", "blocker": "Previous supported control path excluded host-app window; supported registration and actual native-chat execution remain unverified.", "scenarios": ["supported_plugin_registration", "fresh_isolated_real_chat", "verified_native_engine_receipt", "restart_and_attachment_recovery_in_UI"], "receipts": [] },
-    { "id": "migration-and-release", "required": true, "status": "pending", "scenarios": ["offline_import_ids_order_tools_approvals", "failed_import_preserves_original", "rollback_without_replay_or_schema_downgrade", "no_AO_runtime_build_storage_dependency", "required_CI_and_security", "published_exact_source_and_assets"], "receipts": [] }
+    {
+      "id": "live-chat", "required": true, "status": "blocked",
+      "blocker": "Provide an approved no-cost, log-compatible model endpoint and model ID. Authenticated HTTP plugin discovery passed in an isolated real Codex app-server; Codex diagnostic logging blocks further runs of that configuration. Installed chat registration and real model inference remain unverified.",
+      "scenarios": ["supported_plugin_registration", "fresh_isolated_real_chat", "verified_native_engine_receipt", "restart_and_attachment_recovery_in_UI"],
+      "receipts": [
+        {
+          "source": "coding-tools-mcp@1c035659a8f3d4f75f23da05f5fc97643ec76d8d; Orchestrator@06193f56b2651c459e69017ec89a9c7867151463",
+          "command": "node scripts/check-plugin-coding-tools.cjs <Coding Tools checkout> --http",
+          "scope": "Official MCP client and actual isolated host registration/allowlist. Separate authenticated real Codex discovery (sbx-Q0gNxDQX3dJG) did not run inference or use installed chat settings.",
+          "result": "Isolated transport and both tools passed (sbx-2L116QXg6hjV); not real chat parity.",
+          "environment": "Node 26; MCP SDK 1.32.2; Codex app-server 0.164.0 in a disposable profile for discovery only.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    },
+    {
+      "id": "migration-and-release", "required": true, "status": "pending",
+      "blocker": "An authorized finished AO export or isolated capture source, packaged rollback, removal after parity, final security and published asset verification are still required.",
+      "scenarios": ["offline_import_ids_order_tools_approvals", "failed_import_preserves_original", "rollback_without_replay_or_schema_downgrade", "no_AO_runtime_build_storage_dependency", "required_CI_and_security", "published_exact_source_and_assets"],
+      "receipts": [
+        {
+          "source": "Orchestrator@6d61ca3b6e757ebd8a005986dc5df5aad499702c",
+          "command": "node --test --test-isolation=none --test-concurrency=1 tests/ao-snapshot-capture.test.cjs tests/ao-history-export.test.cjs",
+          "scope": "Pinned AO DTO page-capture fixture, local archive import, and reversible visibility. No user data, packaged update or executable conversation rollback was used.",
+          "result": "5 tests passed; exit 0. Exact pinned wire-capture subset only.",
+          "environment": "Node 26, synthetic loopback AO endpoint and a disposable archive.",
+          "verifiedAt": "2026-11-21"
+        }
+      ]
+    }
   ]
 }
