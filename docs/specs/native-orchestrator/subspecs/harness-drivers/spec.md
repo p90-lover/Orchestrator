@@ -16,7 +16,8 @@ FR-4 and FR-5. Direct documented harness protocols, explicit capabilities, scope
 4. WHEN a process exits or loses its protocol stream THEN active work SHALL settle as failed/unknown, not completed or silently retried.
 5. WHEN a session is stopped THEN only its owned child process tree SHALL be terminated.
 6. WHEN a supported driver steers a running native turn THEN it SHALL use the exact session, active provider turn and stable input identity, without starting a follow-up turn. An idempotent duplicate returns a known receipt without contacting the driver; a lost or mismatched acknowledgement SHALL remain unknown and SHALL NOT be retried or converted into a follow-up automatically.
-7. WHEN the host embeds the experimental Pi harness THEN it SHALL supply the exact model and an explicit host-owned runtime, use in-memory settings and sessions with no resource discovery, and refuse enabled tools before executing a prompt. It SHALL NOT promise approval, tool, steering, or restart parity for this text-only route.
+7. WHEN the host embeds the experimental Pi harness THEN it SHALL supply the exact model and an explicit host-owned runtime, use in-memory settings and sessions with no resource discovery, and refuse enabled tools before executing a prompt. It SHALL NOT promise general approval, tool, steering, or restart parity for this route.
+8. WHEN trusted host code enables the Pi approval fixture THEN only its fixed, parameterless read tool SHALL be offered. The exact workspace/session/turn/request tuple SHALL be verified after explicit user confirmation; timeout, stop, stale decisions and absent confirmation SHALL NOT execute it. At most one tool result may continue the original turn; this is not a general permission grant.
 
 ## 涉及文件
 

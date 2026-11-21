@@ -77,7 +77,7 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         });
       };
       try {
-        await driver.run({ session: { ...session }, turn: { ...accepted }, signal: slot.controller.signal, emitText });
+        await driver.run({ session: { ...session }, turn: { ...accepted }, signal: slot.controller.signal, emitText, onStateChange: () => notify(id) });
         await batcher.flush();
         if (outputFailure) throw outputFailure;
         await slot.cancellation;
@@ -183,8 +183,11 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       checkOpen();
       const value = await store.call("observe", { id, turnId });
       const selected = value.turn;
+      const slot = active.get(id), driver = available.get(value.session.harness);
+      const approvals = selected?.state === "running" && slot?.turn?.id === selected.id && driver?.capabilities?.fixtureApproval === true
+        ? driver.pendingApprovals({ sessionId: id, turnId: selected.id }) : [];
       return { sessionId: id, status: value.session.state, turnId: selected?.id ?? null, turnState: selected?.state ?? null,
-        answer: selected?.answer ?? "", error: selected?.error || null, needsInput: false,
+        answer: selected?.answer ?? "", error: selected?.error || null, needsInput: approvals.length > 0, approvals,
         recoveryRequired: value.session.state === "unknown", productionReady: false };
     },
     async recover(id, turnId = null) {
@@ -196,6 +199,19 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       schedule(id);
       const isQueued = value.turnState === "queued";
       return { ...value, replayed: false, recovery: isQueued ? "scheduled" : "observed" };
+    },
+    async resolveApproval(id, turnId, requestId, decision, workspaceId) {
+      checkOpen();
+      if (!turnId || !workspaceId || !requestId) throw failure("APPROVAL_SCOPE_REQUIRED", "Native approval needs the exact workspace and turn");
+      const { session, turn } = await store.call("observe", { id, turnId });
+      const driver = available.get(session.harness), slot = active.get(id);
+      if (closed || session.workspace_id !== workspaceId || turn.state !== "running" || slot?.turn?.id !== turnId || slot.cancellation) {
+        throw failure("APPROVAL_SCOPE_REQUIRED", "The active native approval target changed");
+      }
+      if (driver?.capabilities?.fixtureApproval !== true || typeof driver.resolveApproval !== "function") {
+        throw failure("NATIVE_CAPABILITY_UNSUPPORTED", "This native driver does not accept interactive approval decisions");
+      }
+      return driver.resolveApproval({ sessionId: id, workspaceId, turnId, requestId, decision });
     },
     async cancel(id, turnId) {
       checkOpen();

@@ -15,7 +15,7 @@ const PROVIDER = "orchestrator-isolated-fixture";
 const AGENT = "orchestrator-pi";
 const KEY = "synthetic-model-key";
 
-function fixtureProvider(calls) {
+function fixtureProvider(calls, askApproval) {
   return http.createServer(async (req, res) => {
     try {
       assert.equal(req.method, "POST");
@@ -30,7 +30,7 @@ function fixtureProvider(calls) {
       }
       const request = JSON.parse(Buffer.concat(chunks));
       assert.equal(request.model, MODEL);
-      assert.ok(request.tools === undefined || request.tools.length === 0);
+      assert.deepEqual((request.tools ?? []).map(tool => tool.function.name), askApproval ? ["read_canary_fact"] : []);
       const messages = request.messages;
       calls.push(messages);
       const user = messages.filter(entry => entry.role === "user").map(entry => Array.isArray(entry.content)
@@ -39,6 +39,12 @@ function fixtureProvider(calls) {
       const chunk = (delta, finish_reason) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: MODEL,
         choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
       res.writeHead(200, { "Content-Type": "text/event-stream" });
+      if (askApproval && calls.length === 1) {
+        res.write(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "fixture-tool-call", type: "function",
+          function: { name: "read_canary_fact", arguments: "{}" } }] }, null));
+        res.end(chunk({}, "tool_calls") + "data: [DONE]\n\n");
+        return;
+      }
       res.write(chunk({ role: "assistant", content: response.slice(0, 8) }, null));
       res.end(chunk({ content: response.slice(8) }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
     } catch {
@@ -49,8 +55,11 @@ function fixtureProvider(calls) {
 }
 
 async function main() {
-  const [appRoot, sdkRoot] = process.argv.slice(2);
-  if (!(appRoot && sdkRoot && path.isAbsolute(appRoot) && path.isAbsolute(sdkRoot))) throw new Error("Pass absolute trusted Coding Tools checkout and installed Pi SDK package paths");
+  const [appRoot, sdkRoot, mode, ...extra] = process.argv.slice(2);
+  if (!(appRoot && sdkRoot && path.isAbsolute(appRoot) && path.isAbsolute(sdkRoot)) || extra.length || (mode !== undefined && mode !== "--approval-fixture")) {
+    throw new Error("Pass absolute trusted Coding Tools checkout and installed Pi SDK package paths, with optional --approval-fixture");
+  }
+  const askApproval = mode === "--approval-fixture";
   const info = JSON.parse(await fs.readFile(path.join(sdkRoot, "package.json"), "utf8"));
   assert.equal(info.name, "@earendil-works/pi-coding-agent");
   assert.equal(info.version, "1.5.0");
@@ -66,7 +75,7 @@ async function main() {
   process.env.PI_TELEMETRY = "0";
   process.env.PI_OFFLINE = "1";
   process.env.NO_PROXY = "127.0.0.1";
-  const calls = [], server = fixtureProvider(calls);
+  const calls = [], server = fixtureProvider(calls, askApproval);
   let runtime, workflow;
   try {
     await fs.mkdir(workspace);
@@ -80,7 +89,10 @@ async function main() {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] });
     const model = modelRuntime.getModel(PROVIDER, MODEL);
     assert.ok(model);
-    const driver = createPiDriver({ sdk, agentDir, resolveModel: async () => ({ model, modelRuntime }) });
+    const { Type } = await import(pathToFileURL(path.join(sdkRoot, "node_modules/typebox/build/index.mjs")).href);
+    const driver = createPiDriver({ sdk, agentDir, resolveModel: async () => ({ model, modelRuntime }),
+      ...(askApproval ? { fixtureSchema: Type.Object({}, { additionalProperties: false }) } : {}),
+    });
     const workspaceId = "fixture-workspace";
     runtime = createNativeRuntimeAdapter({ dataRoot: path.join(scratch, "native"), drivers: { [AGENT]: driver },
       catalog: [{ id: AGENT, models: [MODEL] }], resolveWorkspace: async id => id === workspaceId ? { workspaceId, root: workspace } : null });
@@ -90,10 +102,18 @@ async function main() {
     const route = { harness_id: `ao:${AGENT}`, provider_id: "agent-orchestrator", account_id: "ao-local", model: MODEL, permission_profile: ":read-only" };
     const node = { id: "fixture-node", role: "planner", parents: [], state: "pending", route };
     const run = { id: "fixture-run", workspace_id: workspaceId, project_id: "fixture-task", execution_mode: "single", cancelled: false, revision: 1, nodes: [node] };
-    workflow = createAgentOrchestratorWorkflow({ aoHarness: handler.harness, confirm: async () => true,
+    let confirmApproval = false, confirmations = 0;
+    workflow = createAgentOrchestratorWorkflow({ aoHarness: handler.harness,
+      confirm: async ({ message }) => {
+        if (message !== "Allow once?") return true;
+        confirmations += 1;
+        return confirmApproval;
+      },
+      confirmToolRequest: async () => assert.fail("Native approval must not take the legacy remembered confirmation path"),
       requestHeadless: async (endpoint, body) => {
         assert.equal(body.workspace_id, workspaceId);
         if (endpoint === "/api/v1/ao/read") return { ok: true, runs: [structuredClone(run)] };
+        if (endpoint === "/api/v1/ao/harness/status") return { ok: true, status: { connected: false } };
         if (endpoint === "/api/v1/ao/external/reserve") { node.state = "reserved"; return { ok: true, request_key: "fixture-launch", prompt: "first embedded turn" }; }
         if (endpoint === "/api/v1/ao/external/submitted") {
           assert.ok(body.session_id, body.error);
@@ -112,6 +132,27 @@ async function main() {
     });
     const input = { workspaceId, runId: run.id };
     await workflow.call("advance", input);
+    if (askApproval) {
+      let pending;
+      for (let i = 0; i < 150 && !pending; i++) {
+        const observed = await workflow.call("observe", { ...input, nodeId: node.id });
+        pending = observed.pending_approvals?.[0];
+        if (!pending) await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.ok(pending, `The isolated SDK fixture must pause for a native approval; state=${(await handler.harness.observe(node.receipt.thread_id)).turnState}, providerRequests=${calls.length}`);
+      const { approval_id: approvalId, turn_id: turnId, thread_id: sessionId } = pending;
+      assert.equal(pending.tool, "read_canary_fact");
+      node.receipt.turn_id = turnId;
+      await assert.rejects(handler.harness.resolveApproval(sessionId, approvalId, "allow_once"), { code: "APPROVAL_SCOPE_REQUIRED" });
+      await assert.rejects(handler.harness.resolveApproval(sessionId, approvalId, "allow_once", "", { workspaceId: "other", turnId }), { code: "APPROVAL_SCOPE_REQUIRED" });
+      const decision = { ...input, nodeId: node.id, approvalId, decisionId: "allow_once" };
+      assert.equal((await workflow.call("approve_harness", decision)).cancelled, true);
+      assert.equal(calls.length, 1, "Refusing the confirmation must not release the tool or model continuation");
+      confirmApproval = true;
+      assert.equal((await workflow.call("approve_harness", decision)).ok, true);
+      await assert.rejects(workflow.call("approve_harness", decision));
+      assert.equal(confirmations, 2);
+    }
     for (let i = 0; i < 150 && node.state !== "finished"; i++) {
       await workflow.call("observe", { ...input, nodeId: node.id });
       if (node.state !== "finished") await new Promise(resolve => setTimeout(resolve, 20));
@@ -127,15 +168,16 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     assert.equal(latest.answer, "fixture reply: second embedded turn");
-    assert.equal(calls.length, 2);
-    assert.equal(calls[1].filter(message => message.role === "user").length, 2);
+    assert.equal(calls.length, askApproval ? 3 : 2);
+    if (askApproval) assert.ok(calls[1].some(message => message.role === "tool" && JSON.stringify(message.content).includes("orchestrator-canary-fact")));
+    assert.equal(calls.at(-1).filter(message => message.role === "user").length, 2);
     assert.equal(handler.snapshot().state, "stopped");
     await runtime.stop();
     const files = (await fs.readdir(scratch, { recursive: true })).map(name => name.split(path.sep).join("/"));
     assert.deepEqual(files.filter(name => !["workspace", "native"].includes(name)
       && !/^native\/(coordinator-owner|orchestrator)\.sqlite(?:-(?:wal|shm|journal))?$/.test(name)), []);
     console.log(JSON.stringify({ passed: true, harness: `Pi SDK ${info.version}`, provider: "deterministic loopback fixture", nativeTurns: 2,
-      harnessFilesWritten: false, legacyStarted: false, externalInference: false, installedChatTested: false }));
+      harnessFilesWritten: false, approvalFixture: askApproval, legacyStarted: false, externalInference: false, installedChatTested: false }));
   } finally {
     workflow?.dispose();
     try { await runtime?.stop(); } finally {

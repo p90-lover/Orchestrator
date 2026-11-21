@@ -43,7 +43,7 @@ test("native adapter implements the boundary and persists launch affinity withou
   assert.equal(f.runs[0].session.config.model, "fixture-model");
   assert.deepEqual(await runtime.harness.sessionWorkspace(id, "workspace"), { root: await fs.promises.realpath(__dirname), projectFolder: await fs.promises.realpath(__dirname), ready: true });
   await assert.rejects(runtime.harness.sessionWorkspace(id, "other"), { code: "WORKSPACE_SCOPE" });
-  assert.throws(() => runtime.harness.resolveApproval(id, "request", "allow"), { code: "NATIVE_CAPABILITY_UNSUPPORTED" });
+  await assert.rejects(runtime.harness.resolveApproval(id, "request", "allow"), { code: "APPROVAL_SCOPE_REQUIRED" });
   const observed = await runtime.harness.recover(id, done.turnId);
   assert.equal(observed.recovery, "observed"); assert.equal(observed.replayed, false); assert.equal(f.runs.length, 1);
   await runtime.stop();

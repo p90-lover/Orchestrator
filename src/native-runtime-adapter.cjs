@@ -68,8 +68,8 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
     const terminal = TERMINAL.has(value.turnState);
     const timeline = value.answer ? [{ id: `answer-${value.turnId}`, kind: "message", status: terminal ? "completed" : "running", text: value.answer, turnId: value.turnId }] : [];
     return { ...value, sessionId: id, status: value.status === "unknown" ? "unknown" : terminal || !value.turnId ? "idle" : "working",
-      exited: value.status === "closed", answer: terminal ? value.answer : "", liveOutput: value.answer, timeline, approvals: [],
-      needsInput: false, engine: "orchestrator-native", productionReady: false };
+      exited: value.status === "closed", answer: terminal ? value.answer : "", liveOutput: value.answer, timeline, approvals: value.approvals ?? [],
+      needsInput: value.needsInput === true, engine: "orchestrator-native", productionReady: false };
   }
   const harness = {
     watch(listener) {
@@ -140,6 +140,9 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
     },
     async steer(id, text, clientMessageId, { turnId, workspaceId } = {}) {
       return live().steer(internalId(id), turnId, text, clientMessageId, workspaceId);
+    },
+    async resolveApproval(id, requestId, decision, _reason, { turnId, workspaceId } = {}) {
+      return live().resolveApproval(internalId(id), turnId, requestId, decision, workspaceId);
     },
     async interrupt(id, options = {}) {
       const turnId = typeof options === "string" ? options : options.turnId ?? options.expectedTurn;
