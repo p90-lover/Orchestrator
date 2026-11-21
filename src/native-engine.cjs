@@ -40,10 +40,21 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
     }
   }
   function schedule(id) { if (!closed) { waiting.add(id); dispatch(); } }
+  function requestStop(id, slot) {
+    const turnId = slot.turn.id;
+    slot.cancellation ??= Promise.resolve().then(() => slot.driver.cancel({ sessionId: id, turnId }))
+      .then(confirmed => {
+        if (confirmed === false) return false;
+        if (slot.turn?.id === turnId) slot.controller.abort();
+        return true;
+      }, () => false);
+    return slot.cancellation;
+  }
   async function runSession(id, slot) {
     const session = await store.call("get", { id });
     const driver = available.get(session.harness);
     if (!driver) return;
+    slot.driver = driver;
     while (!closed && !slot.controller.signal.aborted) {
       const accepted = await store.call("claim", { id });
       if (!accepted) return;
@@ -53,6 +64,8 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         await store.call("settle", { id, turnId: accepted.id, state: "cancelled" });
         return;
       }
+      const settle = (state, error) => store.call("settle", { id, turnId: accepted.id, state, error });
+      const settleStopped = confirmed => confirmed ? settle("cancelled") : settle("unknown", "Driver did not confirm cancellation before shutdown");
       let outputFailure = null;
       const batcher = createTextBatcher({
         onFlush: async combinedDelta => {
@@ -80,14 +93,15 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         await driver.run({ session: { ...session }, turn: { ...accepted }, signal: slot.controller.signal, emitText, onStateChange: () => notify(id) });
         await batcher.flush();
         if (outputFailure) throw outputFailure;
-        await slot.cancellation;
-        await store.call("settle", { id, turnId: accepted.id, state: slot.controller.signal.aborted ? "cancelled" : "completed" });
+        const confirmed = await slot.cancellation;
+        if (slot.controller.signal.aborted) await settleStopped(confirmed);
+        else await settle("completed");
       } catch (error) {
-        await slot.cancellation;
+        const confirmed = await slot.cancellation;
         if (slot.controller.signal.aborted) {
           await batcher.flush().catch(() => {});
           await batcher.dispose();
-          await store.call("settle", { id, turnId: accepted.id, state: "cancelled" });
+          await settleStopped(confirmed);
         } else {
           await batcher.dispose();
           const isAmbiguous = Boolean(
@@ -175,6 +189,10 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       jobs.add(work);
       try { return await work; } finally { jobs.delete(work); }
     },
+    async readSendReceipt(id, requestId, workspaceId) {
+      checkOpen();
+      return store.call("readSendReceipt", { id, requestId, workspaceId });
+    },
     async readSteerReceipt(id, turnId, clientMessageId, workspaceId) {
       checkOpen();
       return store.call("readSteerReceipt", { id, turnId, clientMessageId, workspaceId });
@@ -218,20 +236,14 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       if (typeof turnId !== "string" || !turnId) throw failure("INVALID_ID", "Choose the exact turn to cancel");
       // Check ownership before signalling anything; a stale UI must not stop a
       // different turn merely because the same session now has new work.
-      const { session, turn } = await store.call("observe", { id, turnId });
+      const { turn } = await store.call("observe", { id, turnId });
       if (["completed", "failed", "cancelled"].includes(turn.state)) return { turnId, state: turn.state };
       const slot = active.get(id);
       if (turn.state === "unknown" || (turn.state === "running" && slot?.turn?.id !== turnId)) {
         throw failure("TURN_OWNERSHIP_UNCONFIRMED", "No verified owner can confirm this turn stopped; queued work was not started");
       }
       if (turn.state === "running") {
-        slot.cancellation ??= Promise.resolve().then(async () => {
-          try { await available.get(session.harness).cancel({ sessionId: id, turnId }); }
-          catch { return false; }
-          if (slot.turn?.id === turnId) slot.controller.abort();
-          return true;
-        });
-        if (!await slot.cancellation) throw failure("TURN_OWNERSHIP_UNCONFIRMED", "The driver did not confirm the turn stopped");
+        if (!await requestStop(id, slot)) throw failure("TURN_OWNERSHIP_UNCONFIRMED", "The driver did not confirm the turn stopped");
         if (slot.turn?.id === turnId) await slot.job;
         return { turnId, state: (await store.call("observe", { id, turnId })).turn.state };
       }
@@ -255,8 +267,8 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       shuttingDown = (async () => {
         const cancellations = [];
         for (const [id, slot] of active) {
+          if (slot.turn) cancellations.push(requestStop(id, slot));
           slot.controller.abort();
-          if (slot.turn) cancellations.push(store.call("get", { id }).then(session => available.get(session.harness).cancel({ sessionId: id, turnId: slot.turn.id })));
         }
         await Promise.allSettled(cancellations);
         await Promise.allSettled([...available.values()].map(driver => driver.close?.()));

@@ -193,6 +193,9 @@ async function main() {
       resourceRoot: path.join(scratch, "no-ao-binary"), dataRoot: path.join(scratch, "no-ao-data"),
       composeRuntime: legacy => createEngineRouter({ legacy, native: reopened, nativeAgents: [agent] }),
     });
+    const followupReceipt = await recoveredHandler.harness.recover(sessionId, null, { workspaceId, requestId: "follow-up-input" });
+    assert.deepEqual(followupReceipt.sendReceipt, { workspaceId, sessionId, requestId: "follow-up-input", turnId: followup.turnId });
+    assert.equal((await recoveredHandler.harness.recover(sessionId, null, { workspaceId: "other-workspace", requestId: "follow-up-input" })).sendReceipt, null);
     let headlessCalls = 0;
     workflow = createAgentOrchestratorWorkflow({ aoHarness: recoveredHandler.harness, inputJournal: journal,
       requestHeadless: () => { headlessCalls += 1; throw new Error("Receipt recovery must not look up or create a current run"); },
@@ -209,7 +212,8 @@ async function main() {
     assert.equal(protocol.filter(item => item.method === "turn/start").length, 2);
     assert.equal(handler.snapshot().state, "stopped", "The native route never started the isolated legacy runtime");
     console.log(JSON.stringify({ passed: true, workflow: "Coding Tools advance, observe and steer", handler: "v1 host factory with native affinity", legacyStarted: false,
-      durableSteering: true, recoveredSteerAfterRestart: true, provider: "in-process Codex protocol fixture", restart: "isolated host journal and native storage",
+      durableSteering: true, recoveredSteerAfterRestart: true, readFollowupReceiptAfterRestart: true,
+      provider: "in-process Codex protocol fixture", restart: "isolated host journal and native storage",
       liveChatTested: false, productionReady: false }));
   } finally {
     workflow?.dispose();

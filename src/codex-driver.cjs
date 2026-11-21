@@ -113,10 +113,11 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
     },
     async cancel({ sessionId, turnId }) {
       const state = await connections.get(sessionId);
-      if (!state || state.turn?.localId !== turnId) return;
+      if (!state || state.turn?.localId !== turnId) return false;
       const error = failure("TURN_CANCELLED", "Turn cancelled by host");
       state.turn.reject(error);
       await state.client.close();
+      return true;
     },
     async close() {
       closed = true;

@@ -201,7 +201,9 @@ function createPiDriver({ sdk, agentDir, resolveModel, maxSessions = 8, fixtureS
     },
     async cancel({ sessionId, turnId }) {
       const owner = sessions.get(sessionId)?.active;
-      if (owner?.turnId === turnId) await stop(owner);
+      if (owner?.turnId !== turnId) return false;
+      await stop(owner);
+      return true;
     },
     async releaseSession(sessionId) {
       const entry = sessions.get(sessionId);

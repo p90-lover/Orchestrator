@@ -122,6 +122,11 @@ const operations = {
       return { state: "dispatching" };
     });
   },
+  readSendReceipt({ id, requestId, workspaceId }) {
+    const accepted = query(`SELECT turn.id FROM turns AS turn JOIN sessions AS session ON turn.session_id=session.id
+      WHERE turn.session_id=? AND turn.client_id=? AND session.workspace_id=?`, identifier(id), identifier(requestId), identifier(workspaceId));
+    return accepted ? { workspaceId, sessionId: id, requestId, turnId: accepted.id } : null;
+  },
   readSteerReceipt({ id, turnId, clientMessageId, workspaceId }) {
     const row = query(`SELECT 1 FROM steers AS receipt JOIN sessions AS session ON session.id=receipt.session_id
       WHERE receipt.session_id=? AND receipt.turn_id=? AND receipt.client_id=? AND session.workspace_id=? AND receipt.state='accepted'`,

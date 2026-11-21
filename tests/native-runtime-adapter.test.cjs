@@ -64,6 +64,26 @@ test("native adapter refuses unsupported settings before engine startup or launc
   assert.equal(starts, 0); assert.equal(f.runs.length, 0);
 });
 
+test("native follow-up receipt survives reopen and matches the reservation, not the latest turn or text", async t => {
+  const f = fixture(t), runtime = f.create();
+  const workspaceId = "workspace";
+  const id = await runtime.harness.spawn({ workspaceId, agent: "orchestrator-fixture", model: "fixture-model", prompt: "start" });
+  await settled(runtime, id);
+  const first = await runtime.harness.send(id, "same input", "reservation-a");
+  const second = await runtime.harness.send(id, "same input", "reservation-b");
+  assert.notEqual(first.turnId, second.turnId);
+  await settled(runtime, id, second.turnId);
+  await runtime.stop();
+  const reopened = f.create(); await reopened.start();
+  const exact = await reopened.harness.recover(id, null, { workspaceId, requestId: "reservation-a" });
+  assert.equal(exact.replayed, false);
+  assert.deepEqual(exact.sendReceipt, { workspaceId, sessionId: id, requestId: "reservation-a", turnId: first.turnId });
+  for (const wrong of [{ workspaceId, requestId: "missing" }, { workspaceId: "other", requestId: "reservation-a" }]) {
+    assert.equal((await reopened.harness.recover(id, null, wrong)).sendReceipt, null);
+  }
+  assert.equal(f.runs.length, 3, "Receipt reads must not run another inference");
+});
+
 test("host recover never dispatches a safe queued turn", async t => {
   const f = fixture(t);
   const store = await openNativeStore({ dataRoot: f.root });
@@ -73,6 +93,9 @@ test("host recover never dispatches a safe queued turn", async t => {
   const runtime = f.create(); await runtime.start();
   const read = await runtime.harness.recover(`native:${session.id}`, turn.id);
   assert.equal(read.turnState, "queued"); assert.equal(read.replayed, false);
+  const receipt = await runtime.harness.recover(`native:${session.id}`, null, { workspaceId: "workspace", requestId: "queued" });
+  assert.equal(receipt.sendReceipt.turnId, turn.id);
+  assert.equal(receipt.replayed, false);
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(f.runs.length, 0);
 });

@@ -261,6 +261,33 @@ test("streaming text buffering flushes before terminal state and storage failure
   assert.notEqual(failed.turnState, "completed");
 });
 
+test("shutdown with an unconfirmed stop preserves the exact unknown turn and its queued successor", async t => {
+  const dataRoot = directory(t);
+  let started = false;
+  const stopped = [];
+  const driver = {
+    async run({ signal, emitText }) { await emitText("retained partial answer"); started = true; await abortWait(signal); },
+    async cancel(scope) { stopped.push(scope); throw new Error("The driver did not confirm cancellation"); },
+  };
+  const engine = await createNativeEngine({ dataRoot, drivers: { fixture: driver } });
+  try {
+    const session = await engine.createSession({ workspaceId: "workspace", harness: "fixture", root: __dirname });
+    const active = await engine.send(session.id, "running", "first");
+    await until(async () => started, Boolean);
+    const queued = await engine.send(session.id, "waiting", "second");
+    await engine.close();
+    assert.deepEqual(stopped, [{ sessionId: session.id, turnId: active.turnId }]);
+    const store = await openNativeStore({ dataRoot });
+    try {
+      const pending = await store.call("observe", { id: session.id, turnId: active.turnId });
+      assert.equal(pending.turn.state, "unknown");
+      assert.equal(pending.turn.answer, "retained partial answer");
+      assert.equal((await store.call("observe", { id: session.id, turnId: queued.turnId })).turn.state, "queued");
+      assert.equal(await store.call("claim", { id: session.id }), null);
+    } finally { await store.close(); }
+  } finally { await engine.close(); }
+});
+
 test("schema verification rejects unsupported or corrupt databases without mutating them", async t => {
   const { DatabaseSync } = require("node:sqlite");
 

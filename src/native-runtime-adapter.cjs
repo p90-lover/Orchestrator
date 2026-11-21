@@ -117,8 +117,16 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       return externalId(created.id);
     },
     async observe(id, expectedTurn) { return observation(id, expectedTurn); },
-    async recover(id, expectedTurn, { workspaceId, inputId } = {}) {
-      if (!engine || stopping || !expectedTurn) return { recovery: "unavailable", status: "unknown", message: "The existing native turn cannot be inspected; no work was started" };
+    async recover(id, expectedTurn, { workspaceId, inputId, requestId } = {}) {
+      if (!engine || stopping || (!expectedTurn && requestId === undefined)) {
+        return { recovery: "unavailable", status: "unknown", message: "The existing native turn cannot be inspected; no work was started" };
+      }
+      if (requestId !== undefined) {
+        if (expectedTurn || inputId !== undefined) throw fail("INVALID_INPUT", "Read a native send receipt by its reservation identity only");
+        const receipt = await live().readSendReceipt(internalId(id), requestId, workspaceId);
+        return { recovery: receipt ? "observed" : "unresolved", replayed: false,
+          sendReceipt: receipt ? { ...receipt, sessionId: id } : null };
+      }
       if (inputId !== undefined) {
         const receipt = await live().readSteerReceipt(internalId(id), expectedTurn, inputId, workspaceId);
         return { recovery: receipt ? "observed" : "unresolved", replayed: false,
