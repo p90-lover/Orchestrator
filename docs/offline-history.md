@@ -10,12 +10,19 @@ All top-level record fields are validated; unsupported fields are rejected rathe
 
 Explicit limits: 16 MiB per export, 500 conversations, 10,000 total events, 2,000 events per conversation, 64 KiB event data, 1,000 blobs, 1 MiB per blob and 8 MiB total blob bytes. The archive has a 256 MiB page budget; exceeding a limit fails without truncation or automatic eviction. This is a bounded offline archive, not a production retention-policy implementation.
 
+## Offline AO snapshot captures
+
+`import-ao` accepts a separate capture envelope, not a stock export produced by the running application. Its `format` is `ao-conversation-pages`, `schemaVersion` is `1`, and `sourceCommit` must match the pinned AO snapshot wire revision in `src/ao-history-export.cjs`. Supply a stable `exportId`, `trimLargeFields: false`, `blobs: []` (if none), and `conversations: [{ workspaceId, pages }]`. An operator-supplied capture contains the unwrapped AO snapshot response for each page as `{ beforeSequence, snapshot }`, newest first. `beforeSequence` is `null` for the first page and equals the preceding snapshot's `oldestSequence` thereafter. Each blob is a normal archive blob plus its opaque AO `uri`; the importer checks bytes and never fetches a URI.
+
+This first converter supports stopped, unbranched finished chats with complete pages. It retains the original conversation, session, turn and timeline IDs, content, order and approval detail. The archive puts the source snapshot metadata in a separate sequence-0 event and keeps the original AO sequences for actual events. Missing, trimmed, changed, active or branched captures are rejected before archive creation. No live collection or database discovery is implemented here. Source files must be explicitly supplied, unlinked regular JSON files.
+
 ## CLI
 
 Requires Node 22.13+ with built-in SQLite. Every data path must be explicitly absolute. The export input must be a regular `.json` file; database paths are refused before reading.
 
 ```sh
 node scripts/import-history.cjs import --data-root /absolute/archive --export /absolute/finished.json
+node scripts/import-history.cjs import-ao --data-root /absolute/archive --export /absolute/ao-capture.json
 node scripts/import-history.cjs read --data-root /absolute/archive --export-id export-1 --limit 50
 node scripts/import-history.cjs read --data-root /absolute/archive --export-id export-1 --conversation-id chat-1 --after -1 --limit 50
 node scripts/import-history.cjs rollback --data-root /absolute/archive --export-id export-1
@@ -30,4 +37,4 @@ Rollback marks one import inactive atomically. It does not delete history or blo
 
 `node --test --test-isolation=none --test-concurrency=1 tests/migration.test.cjs`: eight cases pass on Node 26.12.1. Covers IDs/order, tool outcomes, approval rationale, blob bytes, paging, idempotency, inactive rollback/reactivation, identity conflicts, invalid/active/oversized inputs, injected mid-transaction failure, newer-schema refusal without file changes, tamper detection and CLI argument routing.
 
-The regression suite evaluates the CLI entry point in-process. A separate shell smoke also ran the actual CLI commands for import, paged read, rollback, retained export and identical reactivation. Native-prefixed conversation IDs, legacy IDs, event order and approval rationale survived the round trip. Both checks used synthetic exports; neither opened an AO database. A real AO-export adapter, host archive display, long-history migration and packaged rollback remain required before AO removal.
+The regression suite evaluates the CLI entry point in-process. A separate shell smoke also ran the actual CLI commands for import, paged read, rollback, retained export and identical reactivation. Native-prefixed conversation IDs, legacy IDs, event order and approval rationale survived the round trip. Both checks used synthetic exports; neither opened an AO database. `tests/ao-history-export.test.cjs` additionally covers the pinned AO-format converter, including cursor continuity and rollback. It uses wire-schema fixtures, not an export taken from a user's live session. An operator-supplied real export, supported capture path, branched/long-history migration, host archive display and packaged rollback remain required before AO removal.

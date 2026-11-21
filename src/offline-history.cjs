@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
+const { convertAoHistory } = require("./ao-history-export.cjs");
 
 const FORMAT = "orchestrator-finished-history";
 const MAX_EXPORT_BYTES = 16 * 1024 * 1024;
@@ -125,21 +126,25 @@ function requireImport(db, exportId, includeInactive = false) {
   if (!row || !includeInactive && row.state !== "active") throw fail("HISTORY_NOT_FOUND", "No active import has that identity");
   return row;
 }
-function importOfflineHistory({ dataRoot, exportFile }) {
+function importOfflineHistory({ dataRoot, exportFile, fromAo = false }) {
   if (typeof exportFile !== "string" || !path.isAbsolute(exportFile) || path.extname(exportFile).toLowerCase() !== ".json") throw fail("HISTORY_EXPORT_REQUIRED", "Choose an absolute offline JSON export path, not a database");
   if (!fs.lstatSync(exportFile).isFile() || path.extname(fs.realpathSync(exportFile)).toLowerCase() !== ".json") throw fail("HISTORY_EXPORT_REQUIRED", "Offline export must be a regular JSON file, not a link");
   const handle = fs.openSync(exportFile, "r");
   let parsed;
   try {
     const info = fs.fstatSync(handle);
-    if (!info.isFile() || info.size > MAX_EXPORT_BYTES) throw fail("HISTORY_LIMIT", "Offline export is not a bounded regular file");
+    if (!info.isFile() || info.nlink !== 1) throw fail("HISTORY_EXPORT_REQUIRED", "Offline export must be an unlinked regular JSON file");
+    if (info.size > MAX_EXPORT_BYTES) throw fail("HISTORY_LIMIT", "Offline export exceeds the byte limit");
     const bytes = Buffer.alloc(info.size + 1);
     let offset = 0, count;
     while (offset < bytes.length && (count = fs.readSync(handle, bytes, offset, bytes.length - offset, null)) > 0) offset += count;
-    if (offset !== info.size) throw fail("HISTORY_CHANGED", "Offline export changed while it was read");
+    const after = fs.fstatSync(handle);
+    if (offset !== info.size || after.size !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs || after.nlink !== 1) {
+      throw fail("HISTORY_CHANGED", "Offline export changed while it was read");
+    }
     parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, offset)));
   } finally { fs.closeSync(handle); }
-  const checked = validateExport(parsed), value = checked.value;
+  const checked = validateExport(fromAo === true ? convertAoHistory(parsed) : parsed), value = checked.value;
   const db = openArchive(dataRoot, true, true);
   try {
     return transaction(db, () => {

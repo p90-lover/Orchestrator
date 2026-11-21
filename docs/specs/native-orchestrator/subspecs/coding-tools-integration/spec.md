@@ -18,6 +18,7 @@ FR-6 and FR-7. Preserve the app contract without preserving unrelated AO product
 6. WHEN the host calls recovery to inspect an existing turn THEN the adapter SHALL perform read-only observation and SHALL NOT drain a queued turn or start inference.
 7. WHEN unsupported approval, steering, compaction, terminal, provider or tool settings are requested THEN the experimental adapter SHALL fail explicitly before external execution, not silently downgrade settings.
 8. WHEN native and legacy runtimes are registered together THEN commands targeting an existing session SHALL route only to its persisted engine; an unknown engine or missing native provider SHALL fail without legacy fallback.
+9. WHEN the operator selects HTTP for the compatibility plugin THEN the test transport SHALL listen only on the exact IPv4 loopback authority, require an explicit bearer token, reject browser origins and unauthorized requests, and run only the existing isolated fixture tools. It SHALL NOT replace or restart the installed engine.
 
 ## 不做项
 

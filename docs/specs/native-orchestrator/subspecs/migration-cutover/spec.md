@@ -15,6 +15,7 @@ FR-8 and FR-9. Explicit offline history import, engine affinity, reversible cuto
 3. WHEN the engine is promoted THEN all scenarios in docs/compatibility.md SHALL have passing executable evidence, including installer and rollback checks.
 4. WHEN those gates fail or remain unknown THEN AO SHALL remain available for existing sessions and the app SHALL not claim removal.
 5. WHEN AO removal ships THEN the app package SHALL contain no AO daemon, renderer, build step or live storage dependency.
+6. WHEN importing an operator-supplied capture of finished legacy AO snapshot pages THEN the importer SHALL validate the pinned wire format and complete cursor chain before writing, preserve original IDs, event ordering and payloads, and reject changed, running, truncated, branched or missing-blob captures rather than pretending they migrated.
 
 ## Offline archive contract
 

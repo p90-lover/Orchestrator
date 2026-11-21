@@ -7,7 +7,7 @@ const path = require("node:path");
 const { createNativeRuntimeAdapter } = require("../src/native-runtime-adapter.cjs");
 const { createCodexDriver } = require("../src/codex-driver.cjs");
 const { createEngineRouter } = require("../src/engine-router.cjs");
-const { createOrchestratorHandler, RUNTIME_METHODS, HARNESS_METHODS } = require("../src/orchestrator-handler.cjs");
+const { CONTRACT_VERSION } = require("../src/orchestrator-handler.cjs");
 
 function protocolPeer(calls) {
   let turns = 0;
@@ -54,7 +54,10 @@ async function until(read, done) {
 async function main() {
   const appRoot = process.argv[2];
   if (!appRoot || !path.isAbsolute(appRoot)) throw new Error("Pass an absolute trusted Coding Tools source checkout path");
-  const { createAgentOrchestratorWorkflow } = require(path.join(appRoot, "desktop-electron/electron/agent-orchestrator-workflow.cjs"));
+  const electron = path.join(appRoot, "desktop-electron/electron");
+  const { createAgentOrchestratorWorkflow } = require(path.join(electron, "agent-orchestrator-workflow.cjs"));
+  const { createAgentOrchestratorUpstream } = require(path.join(electron, "agent-orchestrator-upstream.cjs"));
+  assert.equal(require(path.join(electron, "orchestrator-handler.cjs")).CONTRACT_VERSION, CONTRACT_VERSION);
   const parent = path.resolve(__dirname, "../aiTemp/host-native-check");
   await fs.mkdir(parent, { recursive: true });
   const scratch = await fs.mkdtemp(path.join(parent, "case-"));
@@ -63,9 +66,6 @@ async function main() {
   const node = { id: "fixture-node", role: "planner", parents: [], state: "pending", route };
   const run = { id: "fixture-run", workspace_id: workspaceId, project_id: "fixture-task", execution_mode: "single", cancelled: false, revision: 1, nodes: [node] };
   const protocol = [], starts = [], runtimes = [];
-  const unavailable = () => { throw new Error("Legacy engine must not execute this probe"); };
-  const legacy = { ...Object.fromEntries(RUNTIME_METHODS.map(name => [name, unavailable])),
-    harness: { ...Object.fromEntries(HARNESS_METHODS.map(name => [name, unavailable])), async catalog() { return []; }, watch() { return () => {}; } } };
   const open = () => {
     const runtime = createNativeRuntimeAdapter({ dataRoot: scratch, drivers: { [agent]: protocolPeer(protocol) },
       catalog: [{ id: agent, name: "Fixture harness", models: [route.model] }],
@@ -77,7 +77,17 @@ async function main() {
   try {
     const runtime = open();
     const native = { ...runtime, harness: { ...runtime.harness, spawn(options) { starts.push(options); return runtime.harness.spawn(options); } } };
-    const handler = createOrchestratorHandler({ runtime: createEngineRouter({ legacy, native, nativeAgents: [agent] }) });
+    let composed = false;
+    const handler = createAgentOrchestratorUpstream({
+      resourceRoot: path.join(scratch, "no-ao-binary"), dataRoot: path.join(scratch, "no-ao-data"),
+      composeRuntime(legacy) {
+        composed = true;
+        assert.equal(legacy.snapshot().state, "stopped");
+        return createEngineRouter({ legacy, native, nativeAgents: [agent] });
+      },
+    });
+    assert.equal(composed, true, "Use a checkout with the trusted engine composition hook");
+    assert.equal(handler.snapshot().state, "stopped");
     workflow = createAgentOrchestratorWorkflow({ aoHarness: handler.harness, confirm: async () => true,
       requestHeadless: async (endpoint, body) => {
         assert.equal(body.workspace_id, workspaceId);
@@ -126,7 +136,9 @@ async function main() {
     assert.equal((await reopened.harness.recover(sessionId, followup.turnId)).replayed, false);
     assert.equal(protocol.filter(item => item.method === "thread/start").length, 1);
     assert.equal(protocol.filter(item => item.method === "turn/start").length, 2);
-    console.log(JSON.stringify({ passed: true, workflow: "Coding Tools advance and observe", handler: "v1 with native affinity", provider: "in-process Codex protocol fixture", restart: "isolated native storage", liveChatTested: false, productionReady: false }));
+    assert.equal(handler.snapshot().state, "stopped", "The native route never started the isolated legacy runtime");
+    console.log(JSON.stringify({ passed: true, workflow: "Coding Tools advance and observe", handler: "v1 host factory with native affinity", legacyStarted: false,
+      provider: "in-process Codex protocol fixture", restart: "isolated native storage", liveChatTested: false, productionReady: false }));
   } finally {
     workflow?.dispose();
     try { await Promise.all(runtimes.map(runtime => runtime.stop())); }

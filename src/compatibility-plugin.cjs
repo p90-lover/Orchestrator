@@ -8,8 +8,8 @@ const TOOLS = [
   { name: "orchestrator_self_test", description: "Run isolated synthetic native-engine tests for durable turns, event reads and duplicate-message protection. No live model, AO process or production chat is used. Temporary test state is removed afterwards; success does not certify full Coding Tools compatibility.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
 ];
 
-function createCompatibilityPlugin({ scratchRoot, probe = runNativeProbe } = {}) {
-  let initialized = false;
+function createCompatibilityPlugin({ scratchRoot, probe = runNativeProbe, stateless = false } = {}) {
+  let initialized = stateless;
   const error = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
   return async function handle(request) {
     const id = request?.id ?? null;

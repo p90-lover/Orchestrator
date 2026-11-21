@@ -8,7 +8,7 @@ Status: **experimental prototype**, not a replacement for Coding Tools' chat eng
 - Durable acceptance, bounded queues and per-session deduplication of client message IDs.
 - Serialized execution and turn-scoped cancellation. Recovery preserves unknown outcomes rather than replaying inference.
 - Direct Codex app-server protocol prototype: read-only sandbox, scoped thread/turn events, fail-closed approval requests, no reconnect after uncertain delivery.
-- A local stdio MCP server with `orchestrator_status` and `orchestrator_self_test`.
+- A local stdio MCP server and an opt-in authenticated loopback Streamable HTTP server with `orchestrator_status` and `orchestrator_self_test`.
 
 The self-test uses a deterministic fixture driver, not an AI model. It executes a synthetic turn, submits the same command twice, checks completion events, closes storage, reopens it and verifies the answer and replay cursor survive without repeating execution. It removes its isolated test data afterward.
 
@@ -26,6 +26,8 @@ In **Plugins > MCPs**, add a STDIO server:
 
 Use the app's save action; do not overwrite its private MCP settings file. The app keeps that list in memory, so editing the file alone does not load a plugin into the running app. There are at most seven user-server slots beside Coding Tools' own server. A saved server beyond that limit is not evidence it reached a chat.
 
+Alternatively, with a fresh 32-byte hex token provisioned in `ORCHESTRATOR_COMPAT_TOKEN`, run `node scripts/mcp-http-plugin.cjs /absolute/isolated/scratch [port]`. It prints only its exact `http://127.0.0.1:<port>/mcp` address. In an **isolated app profile**, register that address as Streamable HTTP and set `Authorization: Bearer <token>` in the server's header field. Do not open it to a LAN or forward it. Only the host's HTTP-capable harnesses receive it. Requests to another authority or from a browser origin are refused. The server offers POST JSON responses, not a standalone event stream.
+
 New or explicitly resumed sessions receive the configured server. Do not restart or resume an active chat merely to inject test tools. In an isolated test chat, call `orchestrator_status`, then `orchestrator_self_test`. The result must retain `productionReady: false` even when every self-test check passes.
 
 ## Reproducible isolated host test
@@ -36,7 +38,7 @@ With an existing trusted Coding Tools source checkout and its runtime-web depend
 node scripts/check-plugin-coding-tools.cjs /absolute/path/to/coding-tools-mcp
 ```
 
-This uses the actual host's `createChatMcpServers` to save, reload and inject an entry into a synthetic session configuration. The official MCP client from that checkout then starts the real plugin process, initializes it, lists its tools and calls both tools. All settings and data are in a fresh task-owned directory, removed after closing the process. It does not change installed settings, open the live AO database or make a provider call.
+This uses the actual host's `createChatMcpServers` to save, reload and inject an entry into a synthetic session configuration. In the default stdio mode the official MCP client starts the plugin process. Pass `--http` after the checkout path to start the authenticated loopback listener in the current test process and use the host's Streamable HTTP transport instead; no child spawn needed. The actual host's harness allowlist gates the HTTP entry. Both modes initialize the plugin, list its tools and call both tools. All settings and data are isolated and removed after the transport closes. Neither mode changes installed settings, opens the live AO database or makes a provider call.
 
 This verifies the host registration/configuration contract and MCP transport. **It is not a live installed-chat test.** The result names that distinction explicitly.
 
