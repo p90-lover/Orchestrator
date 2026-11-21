@@ -177,8 +177,10 @@ async function main() {
     assert.equal(protocol.filter(item => item.method === "turn/start").length, 1);
     await assert.rejects(handler.harness.spawn({ ...starts[0], requestId: "wrong-scope", approvalMode: "bypass-permissions" }), { code: "NATIVE_CAPABILITY_UNSUPPORTED" });
     await assert.rejects(handler.harness.steer(sessionId, "missing scope"), { code: "STEER_SCOPE_REQUIRED" });
-    const followup = await handler.harness.send(sessionId, "follow-up", "follow-up-input");
-    assert.equal((await handler.harness.send(sessionId, "follow-up", "follow-up-input")).turnId, followup.turnId);
+    const receiver = { workspaceId, runId: "fixture-follow-up-run", nodeId: node.id, requestId: "follow-up-input" };
+    await journal.bindNativeSendTarget(receiver, sessionId);
+    const followup = await handler.harness.send(sessionId, "follow-up", receiver.requestId);
+    assert.equal((await handler.harness.send(sessionId, "follow-up", receiver.requestId)).turnId, followup.turnId);
     await until(() => handler.harness.observe(sessionId, followup.turnId), value => value.turnState === "completed");
     await runtime.stop();
     const reopened = open();
@@ -197,8 +199,21 @@ async function main() {
     assert.deepEqual(followupReceipt.sendReceipt, { workspaceId, sessionId, requestId: "follow-up-input", turnId: followup.turnId });
     assert.equal((await recoveredHandler.harness.recover(sessionId, null, { workspaceId: "other-workspace", requestId: "follow-up-input" })).sendReceipt, null);
     let headlessCalls = 0;
+    const recoveredNode = { ...node, state: "reserved", receipt: { request_key: receiver.requestId } };
+    const recoveredRun = { ...run, id: receiver.runId, nodes: [recoveredNode] };
     workflow = createAgentOrchestratorWorkflow({ aoHarness: recoveredHandler.harness, inputJournal: journal,
-      requestHeadless: () => { headlessCalls += 1; throw new Error("Receipt recovery must not look up or create a current run"); },
+      requestHeadless: async (endpoint, body) => {
+        headlessCalls += 1;
+        assert.equal(body.workspace_id, workspaceId);
+        assert.equal(body.run_id, receiver.runId);
+        if (endpoint === "/api/v1/ao/read") return { ok: true, runs: [structuredClone(recoveredRun)] };
+        assert.equal(endpoint, "/api/v1/ao/external/submitted");
+        assert.deepEqual(body, { workspace_id: workspaceId, run_id: receiver.runId, node_id: receiver.nodeId,
+          request_key: receiver.requestId, session_id: sessionId, turn_id: followup.turnId });
+        recoveredNode.state = "running";
+        recoveredNode.receipt = { request_key: body.request_key, thread_id: body.session_id, turn_id: body.turn_id };
+        return { ok: true, run: structuredClone(recoveredRun) };
+      },
     });
     const receipt = await workflow.call("chat_send", recoverable);
     assert.deepEqual(receipt, { ok: true, steered: true, taskId, runId: run.id, nodeId: node.id, sessionId,
@@ -206,13 +221,16 @@ async function main() {
     assert.equal((await journal.get(workspaceId, recoverable.inputId)).state, "accepted");
     await assert.rejects(workflow.call("chat_send", lost), { code: "INPUT_DELIVERY_UNKNOWN" });
     assert.equal((await journal.get(workspaceId, lost.inputId)).state, "unknown");
-    assert.equal(headlessCalls, 0);
+    assert.equal(headlessCalls, 0, "A steer receipt must not look up or create a current run");
+    const attached = await workflow.call("observe", { workspaceId, runId: receiver.runId, nodeId: receiver.nodeId });
+    assert.equal(attached.run.nodes[0].receipt.turn_id, followup.turnId);
+    assert.equal(attached.run.nodes[0].receipt.thread_id, sessionId);
     assert.equal(protocol.filter(row => row.method === "turn/steer").length, steerCount);
     assert.equal(protocol.filter(item => item.method === "thread/start").length, 1);
     assert.equal(protocol.filter(item => item.method === "turn/start").length, 2);
     assert.equal(handler.snapshot().state, "stopped", "The native route never started the isolated legacy runtime");
     console.log(JSON.stringify({ passed: true, workflow: "Coding Tools advance, observe and steer", handler: "v1 host factory with native affinity", legacyStarted: false,
-      durableSteering: true, recoveredSteerAfterRestart: true, readFollowupReceiptAfterRestart: true,
+      durableSteering: true, recoveredSteerAfterRestart: true, readFollowupReceiptAfterRestart: true, attachedFollowupAfterRestart: true,
       provider: "in-process Codex protocol fixture", restart: "isolated host journal and native storage",
       liveChatTested: false, productionReady: false }));
   } finally {
