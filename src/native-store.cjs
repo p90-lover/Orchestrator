@@ -3,11 +3,15 @@
 const path = require("node:path");
 const { Worker } = require("node:worker_threads");
 const failure = (code, message) => Object.assign(new Error(message), { code });
+const MAX_DATABASE_BYTES = 256 * 1024 * 1024;
 
-async function openNativeStore({ dataRoot, maxPending = 128, startupTimeoutMs = 30000 } = {}) {
+async function openNativeStore({ dataRoot, maxPending = 128, startupTimeoutMs = 30000, maxDatabaseBytes = MAX_DATABASE_BYTES } = {}) {
   if (typeof dataRoot !== "string" || !path.isAbsolute(dataRoot)) throw failure("INVALID_DATA_ROOT", "Choose an absolute native data directory");
   if (!Number.isInteger(maxPending) || maxPending < 1 || maxPending > 1024) throw failure("INVALID_CAPACITY", "Invalid storage request capacity");
-  const worker = new Worker(path.join(__dirname, "native-store-worker.cjs"), { workerData: { dataRoot } });
+  if (!Number.isSafeInteger(maxDatabaseBytes) || maxDatabaseBytes < 256 * 1024 || maxDatabaseBytes > MAX_DATABASE_BYTES) {
+    throw failure("INVALID_CAPACITY", "Native database budget must be 256 KiB to 256 MiB");
+  }
+  const worker = new Worker(path.join(__dirname, "native-store-worker.cjs"), { workerData: { dataRoot, maxDatabaseBytes } });
   const exited = new Promise(resolve => worker.once("exit", resolve));
   let sequence = 0, closed = false, closing = null;
   const pending = new Map();

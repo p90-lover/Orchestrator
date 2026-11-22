@@ -10,11 +10,18 @@ const { sessionConfig } = require("./session-config.cjs");
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const VALID_SETTLE_STATES = new Set(["completed", "failed", "cancelled", "unknown"]);
 const MAX_TEXT = 1024 * 1024;
+const MAX_EVENT_BYTES = 64 * 1024;
+const MAX_EVENT_PAGE_BYTES = 256 * 1024;
 const MAX_STEERS_PER_SESSION = 256;
 const STEER_RESULTS = new Set(["accepted", "not_sent", "unknown"]);
 let db;
 let owner;
 const fail = (code, message) => Object.assign(new Error(message), { code });
+function reportError(error) {
+  if (!error.code?.startsWith("ERR_SQLITE")) return { code: error.code ?? "STORE_ERROR", message: error.message };
+  if (error.errcode === 13) return { code: "STORE_FULL", message: "Native storage is full; existing work was kept" };
+  return { code: error.code, message: "Native storage operation failed" };
+}
 const stamp = () => new Date().toISOString();
 const text = (value, max = 65536) => {
   if (typeof value !== "string" || Buffer.byteLength(value) > max) throw fail("INVALID_INPUT", "Invalid or oversized text");
@@ -37,14 +44,17 @@ function requireSession(id) {
 }
 function event(sessionId, turnId, type, payload = {}) {
   const body = JSON.stringify(payload);
-  if (Buffer.byteLength(body) > 65536) throw fail("EVENT_TOO_LARGE", "Event exceeds its limit");
+  if (Buffer.byteLength(body) > MAX_EVENT_BYTES) throw fail("EVENT_TOO_LARGE", "Event exceeds its limit");
   const result = run("INSERT INTO events(session_id,turn_id,type,payload,created_at) VALUES(?,?,?,?,?)", sessionId, turnId, type, body, stamp());
   return Number(result.lastInsertRowid);
 }
 function transaction(work) {
   db.exec("BEGIN IMMEDIATE");
   try { const value = work(); db.exec("COMMIT"); return value; }
-  catch (error) { db.exec("ROLLBACK"); throw error; }
+  catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* SQLite can already have rolled back on a full disk. */ }
+    throw error;
+  }
 }
 function settleSession(id) {
   const unresolved = query("SELECT state FROM turns WHERE session_id=? AND state IN ('running','unknown','queued') ORDER BY CASE state WHEN 'unknown' THEN 0 WHEN 'running' THEN 1 ELSE 2 END, ordinal LIMIT 1", id);
@@ -194,10 +204,17 @@ const operations = {
   events({ id, after = 0, limit = 50 }) {
     requireSession(id);
     if (!Number.isSafeInteger(after) || after < 0) throw fail("INVALID_CURSOR", "Invalid event cursor");
-    const items = db.prepare("SELECT sequence,turn_id AS turnId,type,payload,created_at AS createdAt FROM events WHERE session_id=? AND sequence>? ORDER BY sequence LIMIT ?").all(id, after, pageSize(limit) + 1);
-    const hasMore = items.length > pageSize(limit);
-    if (hasMore) items.pop();
-    return { items: items.map(item => ({ ...item, payload: JSON.parse(item.payload) })), cursor: items.at(-1)?.sequence ?? after, hasMore };
+    const count = pageSize(limit), items = [];
+    const rows = db.prepare("SELECT sequence,turn_id AS turnId,type,payload,created_at AS createdAt FROM events WHERE session_id=? AND sequence>? ORDER BY sequence LIMIT ?");
+    let bytes = 0, hasMore = false;
+    for (const row of rows.iterate(id, after, count + 1)) {
+      const size = Buffer.byteLength(row.payload);
+      if (size > MAX_EVENT_BYTES) throw fail("EVENT_TOO_LARGE", "Stored event exceeds its supported size");
+      if (items.length === count || bytes + size > MAX_EVENT_PAGE_BYTES) { hasMore = true; break; }
+      bytes += size;
+      items.push({ ...row, payload: JSON.parse(row.payload) });
+    }
+    return { items, cursor: items.at(-1)?.sequence ?? after, hasMore };
   },
   closeSession({ id }) {
     return transaction(() => {
@@ -211,7 +228,7 @@ const operations = {
 };
 
 try {
-  const root = workerData.dataRoot;
+  const { dataRoot: root, maxDatabaseBytes } = workerData;
   if (typeof root !== "string" || !path.isAbsolute(root)) throw fail("INVALID_DATA_ROOT", "Native store requires an explicit absolute data directory");
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   // A separate SQLite lock is released by the OS after a crash; holding it does
@@ -239,7 +256,9 @@ try {
     throw fail("DATABASE_CORRUPT", `Database header or schema check failed: ${err.message}`);
   }
   if (![0, 1, 2, 3].includes(version)) throw fail("SCHEMA_UNSUPPORTED", "Native store schema is newer than this runtime");
-  db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000");
+  db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000; PRAGMA journal_size_limit=4194304");
+  const maxPages = Math.floor(maxDatabaseBytes / query("PRAGMA page_size").page_size);
+  db.exec(`PRAGMA max_page_count=${maxPages}`);
   if (version === 0) transaction(() => {
     db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,harness TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE TABLE turns(ordinal INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL REFERENCES sessions(id),client_id TEXT NOT NULL,digest TEXT NOT NULL,prompt TEXT NOT NULL,state TEXT NOT NULL,answer TEXT NOT NULL,error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(session_id,client_id));
@@ -281,11 +300,11 @@ try {
       }
       if (!Object.hasOwn(operations, operation)) throw fail("UNKNOWN_OPERATION", "Unsupported store operation");
       parentPort.postMessage({ requestId, result: operations[operation](args ?? {}) });
-    } catch (error) { parentPort.postMessage({ requestId, error: { code: error.code ?? "STORE_ERROR", message: error.code?.startsWith("ERR_SQLITE") ? "Native storage operation failed" : error.message } }); }
+    } catch (error) { parentPort.postMessage({ requestId, error: reportError(error) }); }
   });
 } catch (error) {
   try { db?.close(); } catch {}
   try { owner?.close(); } catch {}
-  parentPort.postMessage({ startupError: { code: error.code ?? "STORE_ERROR", message: error.message } });
+  parentPort.postMessage({ startupError: reportError(error) });
   parentPort.close();
 }

@@ -47,6 +47,62 @@ test("native storage persists acceptance, deduplicates requests and scopes all r
   assert.ok(next.items.every(item => item.sequence > events.cursor));
 });
 
+test("native event pages bound encoded bytes and resume without dropping stream data", async t => {
+  const store = await openNativeStore({ dataRoot: directory(t) });
+  t.after(() => store.close());
+  const session = await store.call("create", { workspaceId: "workspace", harness: "fixture", root: __dirname });
+  const args = { id: session.id };
+  const turn = await store.call("enqueue", { ...args, prompt: "stream", clientMessageId: "stream" });
+  await store.call("claim", args);
+  const deltas = Array.from({ length: 24 }, (_, i) => `${i}:${"é".repeat(4000)}${"\n".repeat(3000)}`);
+  for (const delta of deltas) await store.call("append", { ...args, turnId: turn.id, delta });
+  await store.call("settle", { ...args, turnId: turn.id, state: "completed" });
+  const first = await store.call("events", { ...args, limit: 200 });
+  assert.equal(first.hasMore, true, "byte budget must apply even when the row limit has not been reached");
+  assert.equal(first.cursor, first.items.at(-1).sequence);
+  const rest = await store.call("events", { ...args, after: first.cursor, limit: 200 });
+  assert.equal(rest.hasMore, false);
+  for (const page of [first, rest]) {
+    assert.ok(page.items.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item.payload)), 0) <= 256 * 1024);
+  }
+  assert.ok(rest.items[0].sequence > first.cursor);
+  assert.deepEqual([...first.items, ...rest.items].filter(item => item.type === "text.delta").map(item => item.payload.text), deltas);
+  assert.equal(rest.items.at(-1).type, "turn.completed");
+});
+
+test("native page budget refuses new input without evicting prior receipts or invoking a driver", async t => {
+  const dataRoot = directory(t), maxDatabaseBytes = 256 * 1024;
+  const store = await openNativeStore({ dataRoot, maxDatabaseBytes });
+  t.after(() => store.close());
+  const workspaceId = "workspace", id = "budget-session";
+  await store.call("create", { id, workspaceId, harness: "fixture", root: __dirname });
+  const prompt = "x".repeat(65536);
+  const first = await store.call("enqueue", { id, prompt, clientMessageId: "first" });
+  let refused;
+  for (let i = 1; i <= 8; i += 1) {
+    const clientMessageId = `fill-${i}`;
+    try { await store.call("enqueue", { id, prompt, clientMessageId }); }
+    catch (error) { assert.equal(error.code, "STORE_FULL"); refused = clientMessageId; break; }
+  }
+  assert.ok(refused, "a small configured database must refuse growth");
+  const duplicate = await store.call("enqueue", { id, prompt, clientMessageId: "first" });
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.id, first.id);
+  await store.close();
+  assert.ok(fs.statSync(path.join(dataRoot, "orchestrator.sqlite")).size <= maxDatabaseBytes);
+  let dispatched = 0;
+  const engine = await createNativeEngine({ dataRoot, maxDatabaseBytes, drivers: { fixture: {
+    async run() { dispatched += 1; }, async cancel() {},
+  } } });
+  try {
+    await assert.rejects(engine.send(id, prompt, refused), { code: "STORE_FULL" });
+    assert.equal(await engine.readSendReceipt(id, refused, workspaceId), null);
+    assert.equal((await engine.readSendReceipt(id, "first", workspaceId)).turnId, first.id);
+    assert.equal((await engine.observe(id, first.id)).turnState, "queued");
+    assert.equal(dispatched, 0);
+  } finally { await engine.close(); }
+});
+
 test("restart keeps unresolved work unknown and never claims it automatically", async t => {
   const dataRoot = directory(t);
   let store = await openNativeStore({ dataRoot });

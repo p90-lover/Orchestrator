@@ -7,13 +7,13 @@ const { createTextBatcher } = require("./text-batcher.cjs");
 
 const failure = (code, message) => Object.assign(new Error(message), { code });
 
-async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, maxActiveSessions = 8, flushDelayMs = 50 } = {}) {
+async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, maxActiveSessions = 8, flushDelayMs = 50, maxDatabaseBytes } = {}) {
   if (!Number.isInteger(maxActiveSessions) || maxActiveSessions < 1 || maxActiveSessions > 64) throw failure("INVALID_CAPACITY", "Invalid active session limit");
   const available = new Map(Object.entries(drivers));
   for (const [id, driver] of available) {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id) || typeof driver?.run !== "function" || typeof driver?.cancel !== "function") throw failure("INVALID_DRIVER", "Drivers must implement run and cancel");
   }
-  const store = await openNativeStore({ dataRoot });
+  const store = await openNativeStore({ dataRoot, maxDatabaseBytes });
   const active = new Map();
   const waiting = new Set();
   const jobs = new Set();
