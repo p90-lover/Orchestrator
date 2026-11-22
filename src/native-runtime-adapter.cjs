@@ -113,11 +113,9 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       const config = sessionConfig({ model, approvalMode: "read-only", plain, subagent, engineVersion: "0.2-native-adapter" });
       const id = requestId === undefined ? randomUUID() : launchSessionId(workspaceId, requestId);
       await start();
-      const current = live();
-      const created = await current.createSession({ id, workspaceId, harness: agent, root, name, config });
-      const accepted = await current.send(created.id, prompt, "initial");
-      if (!created.duplicate || accepted.state === "queued") ownedSessions.add(created.id);
-      return externalId(created.id);
+      const accepted = await live().launch({ id, workspaceId, harness: agent, root, name, config }, prompt);
+      if (!accepted.duplicate || accepted.state === "queued") ownedSessions.add(accepted.sessionId);
+      return externalId(accepted.sessionId);
     },
     async observe(id, expectedTurn) { return observation(id, expectedTurn); },
     async recover(id, expectedTurn, { workspaceId, inputId, requestId } = {}) {

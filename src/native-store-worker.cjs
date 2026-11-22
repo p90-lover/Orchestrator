@@ -90,22 +90,53 @@ function settleSession(id) {
   run("UPDATE sessions SET state=?,updated_at=? WHERE id=?", unresolved?.state === "unknown" ? "unknown" : unresolved ? "working" : "idle", stamp(), id);
 }
 
+function createSessionRecord({ id = randomUUID(), workspaceId, harness, root, name = "", config = {} }) {
+  identifier(id); identifier(workspaceId); identifier(harness); text(root, 4096); text(name, 200);
+  if (!path.isAbsolute(root)) throw fail("INVALID_ROOT", "Session root must be absolute");
+  const options = JSON.stringify(sessionConfig(config));
+  const previous = session(id);
+  if (previous) {
+    if (previous.workspace_id !== workspaceId || previous.harness !== harness || previous.root !== root || previous.name !== name
+      || JSON.stringify(previous.config) !== options) throw fail("IDEMPOTENCY_CONFLICT", "Session identity belongs to another launch");
+    return { ...previous, duplicate: true };
+  }
+  const at = stamp();
+  run("INSERT INTO sessions(id,workspace_id,harness,root,name,state,created_at,updated_at,config) VALUES(?,?,?,?,?,'idle',?,?,?)", id, workspaceId, harness, root, name, at, at, options);
+  event(id, null, "session.created");
+  return session(id);
+}
+function enqueueTurnRecord({ id, prompt, clientMessageId, capacity = 32 }) {
+  identifier(clientMessageId); text(prompt);
+  if (!prompt.trim()) throw fail("INVALID_INPUT", "Message must not be empty");
+  const digest = createHash("sha256").update(prompt).digest("hex");
+  const current = requireSession(id);
+  if (current.state === "closed") throw fail("SESSION_CLOSED", "Session has ended");
+  const previous = query("SELECT * FROM turns WHERE session_id=? AND client_id=?", id, clientMessageId);
+  if (previous) {
+    if (previous.digest !== digest) throw fail("IDEMPOTENCY_CONFLICT", "Client message ID belongs to different input");
+    return { ...previous, duplicate: true };
+  }
+  const steer = query("SELECT state,digest FROM steers WHERE session_id=? AND client_id=?", id, clientMessageId);
+  if (steer && (steer.state !== "not_sent" || steer.digest !== digest)) {
+    throw fail("IDEMPOTENCY_CONFLICT", "This input belongs to a steer and cannot be sent as a new turn");
+  }
+  if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100) throw fail("INVALID_CAPACITY", "Queue capacity must be 1-100");
+  const queued = query("SELECT COUNT(*) AS count FROM turns WHERE session_id=? AND state IN ('queued','running','unknown')", id).count;
+  if (queued >= capacity) throw fail("QUEUE_FULL", "Session queue is full");
+  const turnId = randomUUID(), at = stamp();
+  run("INSERT INTO turns(id,session_id,client_id,digest,prompt,state,answer,error,created_at,updated_at) VALUES(?,?,?,?,?,'queued','','',?,?)", turnId, id, clientMessageId, digest, prompt, at, at);
+  settleSession(id);
+  event(id, turnId, "turn.accepted");
+  return turn(id, turnId);
+}
+
 const operations = {
-  create({ id = randomUUID(), workspaceId, harness, root, name = "", config = {} }) {
-    identifier(id); identifier(workspaceId); identifier(harness); text(root, 4096); text(name, 200);
-    if (!path.isAbsolute(root)) throw fail("INVALID_ROOT", "Session root must be absolute");
-    const options = JSON.stringify(sessionConfig(config));
+  create(args) { return transaction(() => createSessionRecord(args)); },
+  launch({ session: options, prompt, capacity }) {
     return transaction(() => {
-      const previous = session(id);
-      if (previous) {
-        if (previous.workspace_id !== workspaceId || previous.harness !== harness || previous.root !== root || previous.name !== name
-          || JSON.stringify(previous.config) !== options) throw fail("IDEMPOTENCY_CONFLICT", "Session identity belongs to another launch");
-        return { ...previous, duplicate: true };
-      }
-      const at = stamp();
-      run("INSERT INTO sessions(id,workspace_id,harness,root,name,state,created_at,updated_at,config) VALUES(?,?,?,?,?,'idle',?,?,?)", id, workspaceId, harness, root, name, at, at, options);
-      event(id, null, "session.created");
-      return session(id);
+      const { id } = createSessionRecord(options);
+      const accepted = enqueueTurnRecord({ id, prompt, clientMessageId: "initial", capacity });
+      return { sessionId: id, turnId: accepted.id, state: accepted.state, duplicate: accepted.duplicate === true };
     });
   },
   get({ id }) { return requireSession(id); },
@@ -113,32 +144,7 @@ const operations = {
     text(after, 128);
     return db.prepare("SELECT * FROM sessions WHERE id>? ORDER BY id LIMIT ?").all(after, pageSize(limit)).map(sessionValue);
   },
-  enqueue({ id, prompt, clientMessageId, capacity = 32 }) {
-    identifier(clientMessageId); text(prompt);
-    if (!prompt.trim()) throw fail("INVALID_INPUT", "Message must not be empty");
-    const digest = createHash("sha256").update(prompt).digest("hex");
-    return transaction(() => {
-      const current = requireSession(id);
-      if (current.state === "closed") throw fail("SESSION_CLOSED", "Session has ended");
-      const previous = query("SELECT * FROM turns WHERE session_id=? AND client_id=?", id, clientMessageId);
-      if (previous) {
-        if (previous.digest !== digest) throw fail("IDEMPOTENCY_CONFLICT", "Client message ID belongs to different input");
-        return { ...previous, duplicate: true };
-      }
-      const steer = query("SELECT state,digest FROM steers WHERE session_id=? AND client_id=?", id, clientMessageId);
-      if (steer && (steer.state !== "not_sent" || steer.digest !== digest)) {
-        throw fail("IDEMPOTENCY_CONFLICT", "This input belongs to a steer and cannot be sent as a new turn");
-      }
-      if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100) throw fail("INVALID_CAPACITY", "Queue capacity must be 1-100");
-      const queued = query("SELECT COUNT(*) AS count FROM turns WHERE session_id=? AND state IN ('queued','running','unknown')", id).count;
-      if (queued >= capacity) throw fail("QUEUE_FULL", "Session queue is full");
-      const turnId = randomUUID(), at = stamp();
-      run("INSERT INTO turns(id,session_id,client_id,digest,prompt,state,answer,error,created_at,updated_at) VALUES(?,?,?,?,?,'queued','','',?,?)", turnId, id, clientMessageId, digest, prompt, at, at);
-      settleSession(id);
-      event(id, turnId, "turn.accepted");
-      return turn(id, turnId);
-    });
-  },
+  enqueue(args) { return transaction(() => enqueueTurnRecord(args)); },
   reserveSteer({ id, turnId, prompt, clientMessageId }) {
     identifier(clientMessageId); text(prompt, 32768);
     if (!prompt.trim()) throw fail("INVALID_INPUT", "Message must not be empty");

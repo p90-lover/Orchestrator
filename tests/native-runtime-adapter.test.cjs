@@ -3,7 +3,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const { createNativeRuntimeAdapter } = require("../src/native-runtime-adapter.cjs");
+const { createNativeEngine } = require("../src/native-engine.cjs");
 const { inspectRuntime } = require("../src/orchestrator-handler.cjs");
 const { openNativeStore } = require("../src/native-store.cjs");
 
@@ -34,9 +36,10 @@ test("native adapter implements the boundary and persists launch affinity withou
   assert.equal(inspectRuntime(runtime).shapeCompatible, true);
   assert.equal(runtime.snapshot().state, "stopped");
   const input = { workspaceId: "workspace", agent: "orchestrator-fixture", model: "fixture-model", prompt: "first", requestId: "stable-launch", plain: true };
-  const id = await runtime.harness.spawn(input);
+  const [id, sameId] = await Promise.all([runtime.harness.spawn(input), runtime.harness.spawn(input)]);
   assert.match(id, /^native:/);
-  assert.equal(await runtime.harness.spawn(input), id);
+  assert.equal(sameId, id);
+  await assert.rejects(runtime.harness.spawn({ ...input, prompt: "different input under the same reservation" }), { code: "IDEMPOTENCY_CONFLICT" });
   const done = await settled(runtime, id);
   assert.equal(done.answer, "reply:first"); assert.equal(done.timeline[0].text, "reply:first");
   assert.equal(f.runs.length, 1);
@@ -52,6 +55,36 @@ test("native adapter implements the boundary and persists launch affinity withou
   assert.equal(await reopened.harness.continuable(id), false);
   await assert.rejects(reopened.harness.send(id, "followup", "new-input"), { code: "NATIVE_REATTACH_REQUIRED" });
   assert.equal(f.runs.length, 1);
+});
+
+test("a refused native first-turn write does not leave a committed empty session", async t => {
+  const f = fixture(t), maxDatabaseBytes = 256 * 1024;
+  const workspaceId = "workspace", harness = "orchestrator-fixture";
+  const open = () => openNativeStore({ dataRoot: f.root, maxDatabaseBytes });
+  const filler = await open(), prompt = "x".repeat(65536);
+  let firstTurnId;
+  try {
+    await filler.call("create", { id: "existing", workspaceId, harness, root: __dirname });
+    firstTurnId = (await filler.call("enqueue", { id: "existing", clientMessageId: "keep", prompt })).id;
+    let full = false;
+    for (let i = 0; i < 8; i++) {
+      try { await filler.call("enqueue", { id: "existing", clientMessageId: `fill-${i}`, prompt }); }
+      catch (error) { assert.equal(error.code, "STORE_FULL"); full = true; break; }
+    }
+    assert.equal(full, true, "the test must exhaust the real page budget");
+    assert.equal((await filler.call("readSendReceipt", { id: "existing", requestId: "keep", workspaceId })).turnId, firstTurnId);
+  } finally { await filler.close(); }
+  const runtime = f.create({ createEngine: options => createNativeEngine({ ...options, maxDatabaseBytes }) });
+  const scope = { workspaceId, agent: harness, requestId: "refused-launch" };
+  await assert.rejects(runtime.harness.spawn({ ...scope, model: "fixture-model", prompt }), { code: "STORE_FULL" });
+  assert.equal((await runtime.call("native_launch_receipt", scope)).launchReceipt, null);
+  assert.equal(f.runs.length, 0);
+  await runtime.stop();
+  const reopened = await open();
+  try {
+    assert.deepEqual((await reopened.call("list")).map(session => session.id), ["existing"]);
+    assert.equal((await reopened.call("readSendReceipt", { id: "existing", requestId: "keep", workspaceId })).turnId, firstTurnId);
+  } finally { await reopened.close(); }
 });
 
 test("native adapter refuses unsupported settings before engine startup or launch", async t => {
@@ -108,10 +141,14 @@ test("native launch receipt reads the original accepted turn without starting a 
 test("host recover never dispatches a safe queued turn", async t => {
   const f = fixture(t);
   const store = await openNativeStore({ dataRoot: f.root });
-  const session = await store.call("create", { workspaceId: "workspace", harness: "orchestrator-fixture", root: __dirname, config: { model: "fixture-model" } });
-  const turn = await store.call("enqueue", { id: session.id, prompt: "do not execute during inspection", clientMessageId: "queued" });
+  const scope = { workspaceId: "workspace", agent: "orchestrator-fixture", requestId: "previous-format" };
+  const id = createHash("sha256").update(JSON.stringify([scope.workspaceId, scope.requestId])).digest("hex");
+  const session = await store.call("create", { id, workspaceId: scope.workspaceId, harness: scope.agent, root: __dirname, config: { model: "fixture-model" } });
+  const initial = await store.call("enqueue", { id, prompt: "original first turn", clientMessageId: "initial" });
+  const turn = await store.call("enqueue", { id, prompt: "do not execute during inspection", clientMessageId: "queued" });
   await store.close();
   const runtime = f.create(); await runtime.start();
+  assert.deepEqual((await runtime.call("native_launch_receipt", scope)).launchReceipt, { ...scope, sessionId: `native:${id}`, turnId: initial.id });
   const read = await runtime.harness.recover(`native:${session.id}`, turn.id);
   assert.equal(read.turnState, "queued"); assert.equal(read.replayed, false);
   const receipt = await runtime.harness.recover(`native:${session.id}`, null, { workspaceId: "workspace", requestId: "queued" });

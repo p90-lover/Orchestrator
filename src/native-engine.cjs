@@ -161,6 +161,13 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
     return receipt(state);
   }
 
+  function sessionOptions({ id = randomUUID(), workspaceId, harness, root, name = "", config = {} }) {
+    checkOpen();
+    if (!available.has(harness)) throw failure("DRIVER_UNAVAILABLE", "Requested native driver is unavailable");
+    if (typeof root !== "string" || !path.isAbsolute(root)) throw failure("INVALID_ROOT", "Workspace root must be absolute");
+    return { id, workspaceId, harness, root, name, config };
+  }
+
   const engine = {
     capabilities() {
       const steering = [...available.values()].some(driver => driver.capabilities?.steering === true && typeof driver.steer === "function");
@@ -170,11 +177,11 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         missing: ["live-harness-parity", "tool-approvals", "input-questions", "live-steering-parity", "compaction", "offline-AO-import", "Coding-Tools-cutover"],
         drivers: [...available.keys()] };
     },
-    async createSession({ id = randomUUID(), workspaceId, harness, root, name = "", config = {} }) {
-      checkOpen();
-      if (!available.has(harness)) throw failure("DRIVER_UNAVAILABLE", "Requested native driver is unavailable");
-      if (typeof root !== "string" || !path.isAbsolute(root)) throw failure("INVALID_ROOT", "Workspace root must be absolute");
-      return store.call("create", { id, workspaceId, harness, root, name, config });
+    async createSession(options) { return store.call("create", sessionOptions(options)); },
+    async launch(options, prompt) {
+      const accepted = await store.call("launch", { session: sessionOptions(options), prompt, capacity: queueCapacity });
+      if (accepted.state === "queued") schedule(accepted.sessionId);
+      return accepted;
     },
     async send(id, prompt, clientMessageId) {
       checkOpen();
