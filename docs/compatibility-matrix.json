@@ -35,6 +35,14 @@
           "result": "6 focused tests and TypeScript passed; exit 0. Renderer wiring preserves scope and stores only one page. Final UI interaction still needs a supported canary.",
           "environment": "Node 26.12.1 on Windows, disposable SQLite, no model or installed app used.",
           "verifiedAt": "2026-11-21"
+        },
+        {
+          "source": "coding-tools-mcp@62211d70d36e7429b87ffaf066343132feb239ca",
+          "command": "Isolated Coding Tools Preview: hold/release save, refuse write, reload, page and inspect; focused chat-input store tests",
+          "scope": "Real composer displayed Saving, Saved and Not saved; failed acceptance kept the edit visible, and reload restored the prior committed draft. Later unknown input did not dispatch. An owned attachment survived journal worker termination and source removal; changed bytes blocked execution.",
+          "result": "Observed in Preview (sbx-LKBMSZUldxHe, sbx-P2qoYRgGaR6a); focused host suite passed 12 tests. No installed-app or actual-model test.",
+          "environment": "Node 26.12.1, isolated Preview renderer and journal, synthetic inputs.",
+          "verifiedAt": "2026-11-21"
         }
       ]
     },
@@ -57,6 +65,14 @@
           "result": "All eight checks passed on the exact app head.",
           "environment": "GitHub Actions; Windows/Linux/macOS as selected by the app CI.",
           "verifiedAt": "2026-11-21"
+        },
+        {
+          "source": "coding-tools-mcp@0c1001af45e5bb3b1d7c8fee5451d8d5f7a0f62a; Orchestrator@560abfce20814303585dd3e56a0c2c8224afa91b",
+          "command": "node scripts/check-native-coding-tools.cjs <Coding Tools checkout>",
+          "scope": "Real host factory/workflow, journal and native handler/SQLite: reattach the prior follow-up after reopening both stores and read back accepted native steer without replay. Exact persisted task/run/turn linkage remains in the app draft; headless and provider in this run are fixtures.",
+          "result": "Exit 0 (sbx-i5Vw3IbAjgOy); attachedFollowupAfterRestart=true, recoveredSteerAfterRestart=true, no extra fixture turn and no AO launch.",
+          "environment": "Windows Node 26.12.1, synthetic Codex protocol peer and isolated SQLite.",
+          "verifiedAt": "2026-11-22"
         }
       ]
     },
@@ -125,6 +141,14 @@
           "result": "72 tests passed; exit 0 (sbx-6ViVRKbqdJku).",
           "environment": "Node 26, scoped fixture tests.",
           "verifiedAt": "2026-11-21"
+        },
+        {
+          "source": "Orchestrator@560abfce20814303585dd3e56a0c2c8224afa91b",
+          "command": "node --test --test-isolation=none --test-concurrency=1 tests/native-core.test.cjs",
+          "scope": "Byte-bounded multibyte event paging, SQLite page-budget rejection with prior receipt retained, and no driver invocation for a refused input. Not a WAL soak or physical disk exhaustion test.",
+          "result": "13 passed, exit 0 (sbx-7xrUOXYLfxjk). Both new tests reproduced the missing limits before the fix.",
+          "environment": "Windows Node 26.12.1, disposable SQLite with a 256 KiB limit in the pressure case, no provider.",
+          "verifiedAt": "2026-11-22"
         }
       ]
     },
