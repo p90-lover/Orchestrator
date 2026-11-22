@@ -152,7 +152,7 @@ test("native engine executes without AO, queues in order and does not replay dup
 
 test("cancel is turn-scoped and lets the queued follow-up run after the old driver ends", async t => {
   let started = false;
-  const driver = { async run({ turn, signal, emitText }) { if (turn.prompt === "hold") { started = true; await emitText("pre-cancel text"); await abortWait(signal); } else await emitText("next"); }, async cancel() {} };
+  const driver = { async run({ turn, signal, emitText }) { if (turn.prompt === "hold") { started = true; await emitText("pre-cancel text"); await abortWait(signal); } else await emitText("next"); }, async cancel() { return true; } };
   const engine = await createNativeEngine({ dataRoot: directory(t), drivers: { fixture: driver } });
   t.after(() => engine.close());
   const session = await engine.createSession({ workspaceId: "workspace", harness: "fixture", root: __dirname });
@@ -165,6 +165,28 @@ test("cancel is turn-scoped and lets the queued follow-up run after the old driv
   await until(() => engine.observe(session.id, b.turnId), value => value.turnState === "completed");
   assert.equal((await engine.observe(session.id, a.turnId)).turnState, "cancelled");
   assert.equal((await engine.observe(session.id, a.turnId)).answer, "pre-cancel text");
+});
+
+test("an implicit driver cancellation acknowledgement cannot advance the native queue", async t => {
+  const dataRoot = directory(t);
+  const runs = [];
+  const engine = await createNativeEngine({ dataRoot, drivers: { fixture: {
+    async run({ turn, signal }) { runs.push(turn.id); if (turn.client_id === "first") await abortWait(signal); },
+    async cancel() {},
+  } } });
+  t.after(() => engine.close());
+  const session = await engine.createSession({ workspaceId: "workspace", harness: "fixture", root: __dirname });
+  const first = await engine.send(session.id, "hold", "first");
+  await until(async () => runs[0], id => id === first.turnId);
+  const next = await engine.send(session.id, "next", "second");
+  await assert.rejects(engine.cancel(session.id, first.turnId), { code: "TURN_OWNERSHIP_UNCONFIRMED" });
+  assert.equal((await engine.observe(session.id, next.turnId)).turnState, "queued");
+  await engine.close();
+  const store = await openNativeStore({ dataRoot });
+  t.after(() => store.close());
+  assert.equal((await store.call("observe", { id: session.id, turnId: first.turnId })).turn.state, "unknown");
+  assert.equal((await store.call("observe", { id: session.id, turnId: next.turnId })).turn.state, "queued");
+  assert.deepEqual(runs, [first.turnId]);
 });
 
 test("driver failures do not claim success or expose arbitrary driver error text", async t => {

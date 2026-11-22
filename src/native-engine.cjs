@@ -44,7 +44,7 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
     const turnId = slot.turn.id;
     slot.cancellation ??= Promise.resolve().then(() => slot.driver.cancel({ sessionId: id, turnId }))
       .then(confirmed => {
-        if (confirmed === false) return false;
+        if (confirmed !== true) return false;
         if (slot.turn?.id === turnId) slot.controller.abort();
         return true;
       }, () => false);

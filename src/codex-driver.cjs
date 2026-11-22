@@ -3,8 +3,11 @@
 const { createJsonLineClient } = require("./json-line-client.cjs");
 const failure = (code, message) => Object.assign(new Error(message), { code });
 
-function createCodexDriver({ launch, model, createClient = createJsonLineClient } = {}) {
+function createCodexDriver({ launch, model, createClient = createJsonLineClient, interruptTimeoutMs = 5000 } = {}) {
   if (typeof launch !== "function") throw failure("INVALID_DRIVER", "A host-owned launch resolver is required");
+  if (!Number.isInteger(interruptTimeoutMs) || interruptTimeoutMs < 1 || interruptTimeoutMs > 30000) {
+    throw failure("INVALID_DRIVER", "Choose a bounded interrupt confirmation timeout");
+  }
   const connections = new Map();
   const lostSessions = new Set();
   let closed = false;
@@ -20,13 +23,36 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
     if (turn.ended) return;
     if (method === "item/agentMessage/delta" && typeof params.delta === "string") {
       writeDelta(turn, params.delta);
-    } else if (method === "turn/completed") {
+    } else if (method === "turn/completed" && params.turn?.id === turn.providerId) {
+      const { status } = params.turn;
+      if (!["completed", "failed", "interrupted"].includes(status)) return;
       turn.ended = true;
+      turn.noteTerminal(status);
       turn.writes.then(() => {
-        if (params.turn?.status === "completed") turn.resolve();
+        if (status === "completed") turn.resolve();
+        else if (status === "interrupted") turn.reject(failure("TURN_CANCELLED", "Harness confirmed the turn was interrupted"));
         else turn.reject(failure("HARNESS_TURN_FAILED", "Harness turn did not complete"));
       }, turn.reject);
     }
+  }
+  function endWithoutReceipt(turn, error) {
+    if (!turn || turn.ended) return;
+    turn.ended = true;
+    turn.noteTerminal(null);
+    turn.reject(error);
+  }
+  async function interrupt(state, turn) {
+    let timer;
+    try {
+      const deadline = new Promise(resolve => { timer = setTimeout(() => resolve(null), interruptTimeoutMs); });
+      const reply = state.client.request("turn/interrupt", { threadId: state.threadId, turnId: turn.providerId });
+      // An empty RPC reply acknowledges the request, not the provider's turn outcome.
+      const status = await Promise.race([turn.terminal, reply.then(() => turn.terminal), deadline]);
+      if (status) return status === "interrupted";
+    } catch { /* A failed or missing reply cannot confirm cancellation. */ }
+    finally { clearTimeout(timer); }
+    endWithoutReceipt(turn, failure("INTERRUPT_UNCONFIRMED", "Harness did not confirm that the original turn stopped"));
+    return (await turn.terminal) === "interrupted";
   }
   async function connection(session) {
     if (closed) throw failure("DRIVER_CLOSED", "Native driver has closed");
@@ -36,7 +62,11 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
       const state = { client: null, threadId: null, turn: null };
       const options = await launch(session);
       state.client = createClient({ ...options, cwd: session.root,
-        onClose(error) { if (state.threadId) lostSessions.add(session.id); connections.delete(session.id); state.turn?.reject(error); },
+        onClose(error) {
+          if (state.threadId) lostSessions.add(session.id);
+          connections.delete(session.id);
+          endWithoutReceipt(state.turn, error);
+        },
         onRequest(method, params) {
           if (params.threadId !== state.threadId || params.turnId !== state.turn?.providerId) throw failure("REQUEST_SCOPE", "Harness request does not belong to the active turn");
           if (["item/commandExecution/requestApproval", "item/fileChange/requestApproval"].includes(method)) return { decision: "decline" };
@@ -74,9 +104,15 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
       let resolve, reject;
       const finished = new Promise((yes, no) => { resolve = yes; reject = no; });
       finished.catch(() => {});
-      const turn = { localId: localTurn.id, providerId: null, emitText, writes: Promise.resolve(), early: [], resolve, reject };
+      let noteTerminal;
+      const terminal = new Promise(done => { noteTerminal = done; });
+      const turn = { localId: localTurn.id, providerId: null, emitText, writes: Promise.resolve(), early: [], resolve, reject, noteTerminal, terminal };
       state.turn = turn;
-      const abort = () => { void state.client.close(); reject(failure("TURN_CANCELLED", "Turn cancelled by host")); };
+      const abort = () => {
+        if (turn.ended) return;
+        endWithoutReceipt(turn, failure("INTERRUPT_UNCONFIRMED", "Host stopped before the harness confirmed the turn outcome"));
+        void state.client.close().catch(() => {});
+      };
       signal.addEventListener("abort", abort, { once: true });
       try {
         const response = await state.client.request("turn/start", { threadId: state.threadId, input: [{ type: "text", text: localTurn.prompt, text_elements: [] }] });
@@ -89,9 +125,11 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
         await finished;
         await turn.writes;
       } catch (error) {
-        // A failed acknowledgement or output write does not prove the provider
-        // stopped. Retire this connection before accepting another turn.
-        try { await state.client.close(); } catch {}
+        // Only a confirmed interrupt leaves this connection reusable after a failed run.
+        if (error?.code !== "TURN_CANCELLED") {
+          endWithoutReceipt(turn, error);
+          try { await state.client.close(); } catch {}
+        }
         if (!["HARNESS_TURN_FAILED", "TURN_CANCELLED"].includes(error?.code)) {
           const uncertain = error instanceof Error ? error : failure("DRIVER_UNCERTAIN", "Harness delivery outcome is uncertain");
           uncertain.uncertain = true;
@@ -113,11 +151,9 @@ function createCodexDriver({ launch, model, createClient = createJsonLineClient 
     },
     async cancel({ sessionId, turnId }) {
       const state = await connections.get(sessionId);
-      if (!state || state.turn?.localId !== turnId) return false;
-      const error = failure("TURN_CANCELLED", "Turn cancelled by host");
-      state.turn.reject(error);
-      await state.client.close();
-      return true;
+      const turn = state?.turn;
+      if (!turn?.providerId || turn.localId !== turnId || turn.ended || closed) return false;
+      return turn.interruption ??= interrupt(state, turn);
     },
     async close() {
       closed = true;
