@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const { DatabaseSync } = require("node:sqlite");
 const { setTimeout: pause } = require("node:timers/promises");
 const { openNativeStore } = require("../src/native-store.cjs");
 const { createNativeEngine } = require("../src/native-engine.cjs");
@@ -101,6 +102,60 @@ test("native page budget refuses new input without evicting prior receipts or in
     assert.equal((await engine.observe(id, first.id)).turnState, "queued");
     assert.equal(dispatched, 0);
   } finally { await engine.close(); }
+});
+
+test("a pinned reader pauses native WAL growth without losing the original receipt", async t => {
+  const dataRoot = directory(t), maxDatabaseBytes = 512 * 1024, workspaceId = "workspace", id = "pinned-reader";
+  const file = path.join(dataRoot, "orchestrator.sqlite");
+  const walSize = () => fs.statSync(`${file}-wal`, { throwIfNoEntry: false })?.size ?? 0;
+  const store = await openNativeStore({ dataRoot, maxDatabaseBytes });
+  t.after(() => store.close());
+  await store.call("create", { id, workspaceId, harness: "fixture", root: __dirname });
+  const original = { id, prompt: "original input", clientMessageId: "original" };
+  const later = { id, prompt: "after the reader", clientMessageId: "later" };
+  const first = await store.call("enqueue", original);
+  await store.call("claim", { id });
+  const reader = new DatabaseSync(file, { readOnly: true });
+  let answer = "";
+  try {
+    reader.exec("BEGIN");
+    const oldSnapshot = reader.prepare("SELECT state,answer FROM turns WHERE id=?");
+    assert.equal(oldSnapshot.get(first.id).state, "running");
+    const delta = "abcd".repeat(1024);
+    for (let i = 0; i < 48 && walSize() < maxDatabaseBytes; i++) {
+      await store.call("append", { id, turnId: first.id, delta });
+      answer += delta;
+    }
+    const atLimit = walSize();
+    assert.ok(atLimit >= maxDatabaseBytes && atLimit < maxDatabaseBytes * 2, `Unexpected WAL high-water mark: ${atLimit}`);
+    const before = performance.now();
+    await assert.rejects(store.call("append", { id, turnId: first.id, delta: "uncommitted delta" }), { code: "STORE_WAL_BUSY" });
+    await assert.rejects(store.call("enqueue", later), { code: "STORE_WAL_BUSY" });
+    assert.equal((await store.call("enqueue", original)).id, first.id);
+    await assert.rejects(store.call("enqueue", { ...original, prompt: "changed" }), { code: "IDEMPOTENCY_CONFLICT" });
+    assert.equal((await store.call("readSendReceipt", { id, requestId: "original", workspaceId })).turnId, first.id);
+    assert.equal(await store.call("readSendReceipt", { id, requestId: "later", workspaceId }), null);
+    assert.equal(walSize(), atLimit, "refused operations and receipt reads cannot grow the WAL");
+    t.diagnostic(`Pinned WAL ${atLimit} bytes; refusals and receipt reads ${Math.round(performance.now() - before)} ms`);
+    const stopped = await store.call("settle", { id, turnId: first.id, state: "failed", error: "Output could not be persisted" });
+    assert.equal(stopped.state, "failed", "reserve allows an existing turn to record its outcome");
+    assert.equal(stopped.answer, answer);
+    assert.equal(oldSnapshot.get(first.id).answer, "", "the earlier reader remains pinned throughout");
+    assert.ok(walSize() < maxDatabaseBytes * 2);
+    reader.exec("COMMIT");
+  } finally { reader.close(); }
+  const resumed = await until(async () => {
+    try { return await store.call("enqueue", later); }
+    catch (error) { if (error.code !== "STORE_WAL_BUSY") throw error; return null; }
+  }, Boolean);
+  assert.equal(resumed.state, "queued");
+  assert.ok(walSize() < maxDatabaseBytes, "next admission must checkpoint after the reader releases");
+  await store.close();
+  const reopened = await openNativeStore({ dataRoot, maxDatabaseBytes });
+  try {
+    assert.equal((await reopened.call("observe", { id, turnId: first.id })).turn.answer, answer);
+    assert.equal((await reopened.call("readSendReceipt", { id, requestId: "later", workspaceId })).turnId, resumed.id);
+  } finally { await reopened.close(); }
 });
 
 test("restart keeps unresolved work unknown and never claims it automatically", async t => {

@@ -14,8 +14,12 @@ const MAX_EVENT_BYTES = 64 * 1024;
 const MAX_EVENT_PAGE_BYTES = 256 * 1024;
 const MAX_STEERS_PER_SESSION = 256;
 const STEER_RESULTS = new Set(["accepted", "not_sent", "unknown"]);
+const WAL_HIGH_WATER_BYTES = 4 * 1024 * 1024;
+const CHECKPOINT_RETRY_MS = 250;
+const STORE_BUSY_TIMEOUT_MS = 1000;
 let db;
 let owner;
+let walPath, walBudget, nextCheckpoint = 0, writeRefusal = null;
 const fail = (code, message) => Object.assign(new Error(message), { code });
 function reportError(error) {
   if (!error.code?.startsWith("ERR_SQLITE")) return { code: error.code ?? "STORE_ERROR", message: error.message };
@@ -33,7 +37,8 @@ const identifier = value => {
 };
 const pageSize = value => Number.isInteger(value) && value > 0 && value <= 200 ? value : 50;
 const query = (sql, ...values) => db.prepare(sql).get(...values);
-const run = (sql, ...values) => db.prepare(sql).run(...values);
+function requireWritable() { if (writeRefusal) throw writeRefusal; }
+const run = (sql, ...values) => { requireWritable(); return db.prepare(sql).run(...values); };
 const sessionValue = row => row ? { ...row, config: sessionConfig(JSON.parse(row.config ?? "{}")) } : row;
 const session = id => sessionValue(query("SELECT * FROM sessions WHERE id=?", identifier(id)));
 const turn = (sessionId, turnId) => query("SELECT * FROM turns WHERE session_id=? AND id=?", identifier(sessionId), identifier(turnId));
@@ -48,13 +53,37 @@ function event(sessionId, turnId, type, payload = {}) {
   const result = run("INSERT INTO events(session_id,turn_id,type,payload,created_at) VALUES(?,?,?,?,?)", sessionId, turnId, type, body, stamp());
   return Number(result.lastInsertRowid);
 }
-function transaction(work) {
+function walWriteRefusal(settlement) {
+  const walBytes = () => fs.statSync(walPath, { throwIfNoEntry: false })?.size ?? 0;
+  try {
+    let size = walBytes();
+    if (size >= walBudget && performance.now() >= nextCheckpoint) {
+      nextCheckpoint = performance.now() + CHECKPOINT_RETRY_MS;
+      // A pinned reader must not make the only storage worker wait for a checkpoint lock.
+      db.exec("PRAGMA busy_timeout=0");
+      try { if (query("PRAGMA wal_checkpoint(TRUNCATE)").busy === 0) nextCheckpoint = 0; }
+      finally { db.exec(`PRAGMA busy_timeout=${STORE_BUSY_TIMEOUT_MS}`); }
+      size = walBytes();
+    }
+    // Admission is checked before a transaction. Terminal writes get a separate bounded reserve.
+    if (size >= walBudget * (settlement ? 2 : 1)) {
+      return fail("STORE_WAL_BUSY", "Native storage maintenance is blocked; existing work was kept");
+    }
+    return null;
+  } catch (error) {
+    return error.code?.startsWith("ERR_SQLITE") ? error
+      : fail("STORE_WAL_UNAVAILABLE", "Native storage maintenance could not be verified; existing work was kept");
+  }
+}
+function transaction(work, { settlement = false } = {}) {
+  const refusal = walWriteRefusal(settlement);
   db.exec("BEGIN IMMEDIATE");
+  writeRefusal = refusal;
   try { const value = work(); db.exec("COMMIT"); return value; }
   catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* SQLite can already have rolled back on a full disk. */ }
     throw error;
-  }
+  } finally { writeRefusal = null; }
 }
 function settleSession(id) {
   const unresolved = query("SELECT state FROM turns WHERE session_id=? AND state IN ('running','unknown','queued') ORDER BY CASE state WHEN 'unknown' THEN 0 WHEN 'running' THEN 1 ELSE 2 END, ordinal LIMIT 1", id);
@@ -152,7 +181,7 @@ const operations = {
       run("UPDATE steers SET state=? WHERE session_id=? AND client_id=?", state, id, clientMessageId);
       if (state === "accepted") event(id, turnId, "steer.accepted", { clientMessageId, text: row.prompt });
       return { state };
-    });
+    }, { settlement: true });
   },
   claim({ id }) {
     return transaction(() => {
@@ -193,7 +222,7 @@ const operations = {
       settleSession(id);
       event(id, turnId, `turn.${state}`, { error });
       return turn(id, turnId);
-    });
+    }, { settlement: true });
   },
   observe({ id, turnId = null }) {
     const current = requireSession(id);
@@ -236,7 +265,10 @@ try {
   owner = new DatabaseSync(path.join(root, "coordinator-owner.sqlite"));
   try { owner.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE"); }
   catch { throw fail("STORE_IN_USE", "Another coordinator owns this data directory"); }
-  db = new DatabaseSync(path.join(root, "orchestrator.sqlite"));
+  const file = path.join(root, "orchestrator.sqlite");
+  db = new DatabaseSync(file);
+  walPath = `${file}-wal`;
+  walBudget = Math.min(maxDatabaseBytes, WAL_HIGH_WATER_BYTES);
   let version;
   try {
     const row = query("PRAGMA user_version");
@@ -256,10 +288,12 @@ try {
     throw fail("DATABASE_CORRUPT", `Database header or schema check failed: ${err.message}`);
   }
   if (![0, 1, 2, 3].includes(version)) throw fail("SCHEMA_UNSUPPORTED", "Native store schema is newer than this runtime");
-  db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000; PRAGMA journal_size_limit=4194304");
+  db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    PRAGMA busy_timeout=${STORE_BUSY_TIMEOUT_MS}; PRAGMA journal_size_limit=${walBudget}; PRAGMA wal_autocheckpoint=0`);
   const maxPages = Math.floor(maxDatabaseBytes / query("PRAGMA page_size").page_size);
   db.exec(`PRAGMA max_page_count=${maxPages}`);
   if (version === 0) transaction(() => {
+    requireWritable();
     db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,harness TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE TABLE turns(ordinal INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL REFERENCES sessions(id),client_id TEXT NOT NULL,digest TEXT NOT NULL,prompt TEXT NOT NULL,state TEXT NOT NULL,answer TEXT NOT NULL,error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(session_id,client_id));
       CREATE INDEX turn_queue ON turns(session_id,state,ordinal);
@@ -267,9 +301,11 @@ try {
       CREATE INDEX session_events ON events(session_id,sequence); PRAGMA user_version=1;`);
   });
   if (version < 2) transaction(() => {
+    requireWritable();
     db.exec("ALTER TABLE sessions ADD COLUMN config TEXT NOT NULL DEFAULT '{}'; PRAGMA user_version=2;");
   });
   if (version < 3) transaction(() => {
+    requireWritable();
     db.exec(`CREATE TABLE steers(
       session_id TEXT NOT NULL REFERENCES sessions(id), client_id TEXT NOT NULL,
       turn_id TEXT NOT NULL REFERENCES turns(id), digest TEXT NOT NULL, prompt TEXT NOT NULL,
@@ -277,7 +313,7 @@ try {
       PRIMARY KEY(session_id,client_id)); PRAGMA user_version=3;`);
   });
   transaction(() => {
-    run("UPDATE steers SET state='unknown' WHERE state='dispatching'");
+    if (query("SELECT 1 FROM steers WHERE state='dispatching' LIMIT 1")) run("UPDATE steers SET state='unknown' WHERE state='dispatching'");
     const running = db.prepare("SELECT id,session_id FROM turns WHERE state='running'").all();
     const touchedSessions = new Set();
     for (const item of running) {
@@ -288,7 +324,7 @@ try {
     for (const sessionId of touchedSessions) {
       settleSession(sessionId);
     }
-  });
+  }, { settlement: true });
   parentPort.postMessage({ ready: true });
   parentPort.on("message", ({ requestId, operation, args }) => {
     try {
