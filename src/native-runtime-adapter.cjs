@@ -16,6 +16,9 @@ function internalId(value) {
   return value.slice(PREFIX.length);
 }
 function externalId(value) { return PREFIX + value; }
+const validWorkspace = value => typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value);
+const validLaunchRequest = value => typeof value === "string" && value.length > 0 && value.length <= 200;
+const launchSessionId = (workspaceId, requestId) => createHash("sha256").update(JSON.stringify([workspaceId, requestId])).digest("hex");
 
 function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, catalog = [], resolveWorkspace, createEngine = createNativeEngine } = {}) {
   if (typeof dataRoot !== "string" || !path.isAbsolute(dataRoot) || typeof resolveWorkspace !== "function") throw fail("INVALID_NATIVE_HOST", "Native runtime needs explicit storage and a host workspace resolver");
@@ -90,8 +93,8 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       if (!options || typeof options !== "object" || Array.isArray(options) || Object.keys(options).some(key => !fields.has(key))) unsupported("unrecognized launch settings");
       const { workspaceId, agent, model, prompt = "", name = "", gateway = null, effort = null, contextWindow = null,
         approvalMode = null, autoReview = false, plain = false, warm = false, subagent = false, requestId } = options;
-      if (typeof workspaceId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(workspaceId)) throw fail("WORKSPACE_SCOPE", "Choose a valid workspace identity");
-      if (requestId !== undefined && (typeof requestId !== "string" || !requestId || requestId.length > 200)) throw fail("INVALID_INPUT", "Choose a stable launch request identity");
+      if (!validWorkspace(workspaceId)) throw fail("WORKSPACE_SCOPE", "Choose a valid workspace identity");
+      if (requestId !== undefined && !validLaunchRequest(requestId)) throw fail("INVALID_INPUT", "Choose a stable launch request identity");
       const descriptor = descriptors.get(agent);
       if (!descriptor) throw fail("DRIVER_UNAVAILABLE", "Native driver is not configured");
       if (typeof model !== "string" || !descriptor.models.includes(model)) unsupported("the selected model");
@@ -108,7 +111,7 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       const root = await fs.realpath(workspace.root);
       if (!(await fs.stat(root)).isDirectory()) throw fail("WORKSPACE_SCOPE", "Workspace root is not a directory");
       const config = sessionConfig({ model, approvalMode: "read-only", plain, subagent, engineVersion: "0.2-native-adapter" });
-      const id = requestId === undefined ? randomUUID() : createHash("sha256").update(JSON.stringify([workspaceId, String(requestId)])).digest("hex");
+      const id = requestId === undefined ? randomUUID() : launchSessionId(workspaceId, requestId);
       await start();
       const current = live();
       const created = await current.createSession({ id, workspaceId, harness: agent, root, name, config });
@@ -194,6 +197,16 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       try { await stopping; return { ok: true }; } finally { stopping = null; }
     },
     async call(operation, args = {}) {
+      if (operation === "native_launch_receipt") {
+        const { workspaceId, agent, requestId } = args;
+        if (!validWorkspace(workspaceId) || !validLaunchRequest(requestId)) throw fail("INVALID_INPUT", "Choose the original native launch scope");
+        if (!descriptors.has(agent)) throw fail("DRIVER_UNAVAILABLE", "Native driver is not configured");
+        if (!engine || stopping) return { launchReceipt: null };
+        const current = live(), id = launchSessionId(workspaceId, requestId);
+        const first = await current.readSendReceipt(id, "initial", workspaceId);
+        if (!first || (await current.session(id)).harness !== agent) return { launchReceipt: null };
+        return { launchReceipt: { workspaceId, agent, requestId, sessionId: externalId(id), turnId: first.turnId } };
+      }
       if (operation === "native_status") return snapshot();
       if (operation === "native_start") return start();
       if (operation === "native_stop") return runtime.stop();

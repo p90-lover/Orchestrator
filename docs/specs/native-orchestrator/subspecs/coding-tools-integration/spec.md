@@ -20,6 +20,7 @@ FR-6 and FR-7. Preserve the app contract without preserving unrelated AO product
 8. WHEN native and legacy runtimes are registered together THEN commands targeting an existing session SHALL route only to its persisted engine; an unknown engine or missing native provider SHALL fail without legacy fallback.
 9. WHEN the operator selects HTTP for the compatibility plugin THEN the test transport SHALL listen only on the exact IPv4 loopback authority, require an explicit bearer token, reject browser origins and unauthorized requests, and run only the existing isolated fixture tools. It SHALL NOT replace or restart the installed engine.
 10. WHEN a native follow-up is sent to an existing session THEN the host SHALL commit the workspace/run/card/reservation/session binding first. After host restart, an exact engine receipt may attach that reserved card and persist its turn ID; missing or mismatched receipts SHALL keep it reserved without dispatch. A subsequent result from a different turn SHALL NOT settle that card.
+11. WHEN the first native launch reply or its host submission is lost THEN only a read-only lookup by the saved workspace, harness and launch reservation SHALL attach the exact first turn. Missing or mismatched receipts SHALL keep the card reserved. The lookup SHALL NOT start either engine, send a prompt, inspect the latest turn, or fall back to AO.
 
 ## 不做项
 

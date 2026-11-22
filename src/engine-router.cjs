@@ -69,7 +69,9 @@ function createEngineRouter({ legacy, native, nativeAgents = [] } = {}) {
   runtime.survivingChatHosts = async (...args) => (await both("survivingChatHosts", args)).flat();
   runtime.call = (operation, ...args) => {
     if (typeof operation === "string" && operation.startsWith("native_")) {
-      if (!native) throw fail("NATIVE_UNAVAILABLE", "Native provider is unavailable");
+      if (!native || operation === "native_launch_receipt" && !allowed.has(args[0]?.agent)) {
+        throw fail("NATIVE_UNAVAILABLE", "Native provider is unavailable or not enabled");
+      }
       return native.call(operation, ...args);
     }
     return legacy.call(operation, ...args);

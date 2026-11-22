@@ -84,6 +84,27 @@ test("native follow-up receipt survives reopen and matches the reservation, not 
   assert.equal(f.runs.length, 3, "Receipt reads must not run another inference");
 });
 
+test("native launch receipt reads the original accepted turn without starting a stopped runtime", async t => {
+  const f = fixture(t), runtime = f.create();
+  const scope = { workspaceId: "workspace", agent: "orchestrator-fixture", requestId: "cold-reservation" };
+  const read = (target, keys = scope) => target.call("native_launch_receipt", keys);
+  assert.equal((await read(runtime)).launchReceipt, null);
+  assert.equal(runtime.snapshot().state, "stopped");
+  const sessionId = await runtime.harness.spawn({ ...scope, model: "fixture-model", prompt: "same text" });
+  const first = await settled(runtime, sessionId);
+  const later = await runtime.harness.send(sessionId, "same text", "followup");
+  await settled(runtime, sessionId, later.turnId);
+  await runtime.stop();
+  const reopened = f.create();
+  assert.equal((await read(reopened)).launchReceipt, null);
+  await reopened.start();
+  assert.deepEqual((await read(reopened)).launchReceipt, { ...scope, sessionId, turnId: first.turnId });
+  assert.equal((await read(reopened, { ...scope, workspaceId: "other" })).launchReceipt, null);
+  assert.equal((await read(reopened, { ...scope, requestId: "different" })).launchReceipt, null);
+  await assert.rejects(read(reopened, { ...scope, agent: "unconfigured" }), { code: "DRIVER_UNAVAILABLE" });
+  assert.equal(f.runs.length, 2);
+});
+
 test("host recover never dispatches a safe queued turn", async t => {
   const f = fixture(t);
   const store = await openNativeStore({ dataRoot: f.root });

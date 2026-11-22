@@ -104,6 +104,7 @@ async function main() {
     const run = { id: "fixture-run", workspace_id: workspaceId, project_id: "fixture-task", execution_mode: "single", cancelled: false, revision: 1, nodes: [node] };
     let confirmApproval = false, confirmations = 0;
     workflow = createAgentOrchestratorWorkflow({ aoHarness: handler.harness,
+      readNativeLaunchReceipt: async scope => (await handler.call("native_launch_receipt", scope)).launchReceipt,
       confirm: async ({ message }) => {
         if (message !== "Allow once?") return true;
         confirmations += 1;
@@ -118,7 +119,8 @@ async function main() {
         if (endpoint === "/api/v1/ao/external/submitted") {
           assert.ok(body.session_id, body.error);
           node.state = "running";
-          node.receipt = { request_key: body.request_key, thread_id: body.session_id };
+          assert.ok(body.turn_id);
+          node.receipt = { request_key: body.request_key, thread_id: body.session_id, turn_id: body.turn_id };
           return { ok: true, run: structuredClone(run) };
         }
         if (endpoint === "/api/v1/ao/external/terminal") {

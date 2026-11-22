@@ -31,9 +31,11 @@ test("engine router requires opt-in native launch and cannot fall back when unav
   const off = createEngineRouter({ legacy: legacy.engine, native: native.engine });
   assert.deepEqual(await off.harness.catalog(), [{ id: "legacy-fixture" }]);
   assert.throws(() => off.harness.spawn({ agent: "orchestrator-fixture" }), { code: "NATIVE_UNAVAILABLE" });
+  assert.throws(() => off.call("native_launch_receipt", { agent: "orchestrator-fixture" }), { code: "NATIVE_UNAVAILABLE" });
   const missing = createEngineRouter({ legacy: legacy.engine, nativeAgents: ["orchestrator-fixture"] });
   assert.throws(() => missing.harness.spawn({ agent: "orchestrator-fixture" }), { code: "NATIVE_UNAVAILABLE" });
   assert.throws(() => missing.harness.observe("native:one"), { code: "NATIVE_UNAVAILABLE" });
+  assert.throws(() => missing.call("native_launch_receipt", { agent: "orchestrator-fixture" }), { code: "NATIVE_UNAVAILABLE" });
   assert.equal(legacy.calls.length, 0);
 });
 

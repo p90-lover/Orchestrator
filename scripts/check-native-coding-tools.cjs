@@ -87,7 +87,12 @@ async function main() {
   try {
     const runtime = open();
     const native = { ...runtime, harness: { ...runtime.harness,
-      spawn(options) { starts.push(options); return runtime.harness.spawn(options); },
+      async spawn(options) {
+        starts.push(options);
+        const sessionId = await runtime.harness.spawn(options);
+        if (starts.length === 1) throw new Error("Fixture lost the first launch reply");
+        return sessionId;
+      },
       async steer(sessionId, text, inputId, scope) {
         if (inputId !== undefined) {
           const { receipt } = await journal.get(workspaceId, inputId);
@@ -111,20 +116,28 @@ async function main() {
     });
     assert.equal(composed, true, "Use a checkout with the trusted engine composition hook");
     assert.equal(handler.snapshot().state, "stopped");
-    workflow = createAgentOrchestratorWorkflow({ aoHarness: handler.harness, inputJournal: journal, confirm: async () => true,
+    let droppedSubmission = false;
+    const host = () => createAgentOrchestratorWorkflow({ aoHarness: handler.harness, inputJournal: journal, confirm: async () => true,
+      readNativeLaunchReceipt: async scope => (await handler.call("native_launch_receipt", scope)).launchReceipt,
       requestHeadless: async (endpoint, body) => {
         assert.equal(body.workspace_id, workspaceId);
         if (endpoint === "/api/v1/ao/read") return { ok: true, runs: [structuredClone(run)] };
         if (endpoint === "/api/v1/ao/external/reserve") {
           assert.equal(body.confirm, true);
           node.state = "reserved";
+          node.receipt = { request_key: requestKey };
           return { ok: true, request_key: requestKey, prompt: "first native turn" };
         }
         if (endpoint === "/api/v1/ao/external/submitted") {
           assert.equal(body.request_key, requestKey);
           assert.ok(body.session_id, body.error);
+          assert.ok(body.turn_id, "First native submission must identify its exact turn");
+          if (!droppedSubmission) {
+            droppedSubmission = true;
+            throw new Error("Fixture lost the host submission before commit");
+          }
           node.state = "running";
-          node.receipt = { request_key: requestKey, thread_id: body.session_id };
+          node.receipt = { request_key: requestKey, thread_id: body.session_id, turn_id: body.turn_id };
           return { ok: true, run: structuredClone(run) };
         }
         if (endpoint === "/api/v1/ao/external/terminal") {
@@ -138,11 +151,19 @@ async function main() {
       },
     });
     const input = { workspaceId, runId: run.id };
-    await workflow.call("advance", input);
+    workflow = host();
+    await assert.rejects(workflow.call("advance", input), /lost the host submission/);
+    assert.equal(node.state, "reserved");
     await until(() => openingTurn.finish, Boolean);
-    const sessionId = node.receipt.thread_id;
-    const { turnId: firstTurn } = await handler.harness.observe(sessionId);
-    node.receipt.turn_id = firstTurn;
+    workflow.dispose();
+    await journal.close();
+    journal = openJournal();
+    workflow = host();
+    await workflow.call("observe", { ...input, nodeId: node.id });
+    assert.equal(node.state, "running");
+    const { thread_id: sessionId, turn_id: firstTurn } = node.receipt;
+    assert.equal((await handler.harness.observe(sessionId, firstTurn)).turnId, firstTurn);
+    assert.equal(starts.length, 1);
     const taskId = run.project_id, message = "fixture steering input";
     async function saveSteer(inputId) {
       const saved = await workflow.call("chat_input", { action: "accept", workspaceId, key: taskId, inputId, mode: "steer",
@@ -195,6 +216,9 @@ async function main() {
       resourceRoot: path.join(scratch, "no-ao-binary"), dataRoot: path.join(scratch, "no-ao-data"),
       composeRuntime: legacy => createEngineRouter({ legacy, native: reopened, nativeAgents: [agent] }),
     });
+    const launchScope = { workspaceId, agent, requestId: requestKey };
+    assert.deepEqual((await recoveredHandler.call("native_launch_receipt", launchScope)).launchReceipt,
+      { ...launchScope, sessionId, turnId: firstTurn });
     const followupReceipt = await recoveredHandler.harness.recover(sessionId, null, { workspaceId, requestId: "follow-up-input" });
     assert.deepEqual(followupReceipt.sendReceipt, { workspaceId, sessionId, requestId: "follow-up-input", turnId: followup.turnId });
     assert.equal((await recoveredHandler.harness.recover(sessionId, null, { workspaceId: "other-workspace", requestId: "follow-up-input" })).sendReceipt, null);
@@ -230,7 +254,8 @@ async function main() {
     assert.equal(protocol.filter(item => item.method === "turn/start").length, 2);
     assert.equal(handler.snapshot().state, "stopped", "The native route never started the isolated legacy runtime");
     console.log(JSON.stringify({ passed: true, workflow: "Coding Tools advance, observe and steer", handler: "v1 host factory with native affinity", legacyStarted: false,
-      durableSteering: true, recoveredSteerAfterRestart: true, readFollowupReceiptAfterRestart: true, attachedFollowupAfterRestart: true,
+      recoveredFirstLaunchAfterLostSubmission: true, durableSteering: true, recoveredSteerAfterRestart: true,
+      readFollowupReceiptAfterRestart: true, attachedFollowupAfterRestart: true,
       provider: "in-process Codex protocol fixture", restart: "isolated host journal and native storage",
       liveChatTested: false, productionReady: false }));
   } finally {
