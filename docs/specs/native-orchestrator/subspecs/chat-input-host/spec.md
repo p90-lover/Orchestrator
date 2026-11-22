@@ -14,7 +14,7 @@ Own FR-10: durable draft revisions, attachment ownership, submitted-input receip
 2. WHEN Send, Queue or Steer is accepted THEN the full input SHALL commit before clearing that revision or dispatch; newer typing SHALL remain.
 3. WHEN a window submits an outdated revision THEN it SHALL not overwrite newer content; a recovery conflict SHALL preserve the attempted content.
 4. WHEN an attachment is accepted THEN its bytes SHALL be preserved in app-owned storage before a durable reference is returned.
-5. WHEN limits or disk errors occur THEN the system SHALL reject visibly without silent truncation or eviction of pending content.
+5. WHEN limits or disk errors occur THEN the system SHALL reject visibly without silent truncation or eviction of pending content. WHEN the journal explicitly rejects a draft without committing THEN a newer correction SHALL be saveable against the last acknowledged revision without retrying the rejected snapshot first. WHEN the reply is missing or uncertain THEN an exact mutation retry SHALL precede saving a newer revision.
 6. WHEN a duplicate input ID has the same payload THEN acceptance SHALL return the same receipt; changed content SHALL fail with a conflict.
 7. WHEN an uncertain dispatch is recovered THEN it SHALL remain delivery-unknown unless an exact receiver receipt proves its outcome; text matching SHALL NOT authorize replay.
 8. WHEN draft/queue JSON is imported THEN import SHALL be transactional and idempotent and original files SHALL remain untouched during migration.
