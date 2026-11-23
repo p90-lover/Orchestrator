@@ -140,9 +140,18 @@ const operations = {
     });
   },
   get({ id }) { return requireSession(id); },
-  list({ after = "", limit = 50 } = {}) {
+  list({ after = "", limit = 50, workspaceId } = {}) {
     text(after, 128);
-    return db.prepare("SELECT * FROM sessions WHERE id>? ORDER BY id LIMIT ?").all(after, pageSize(limit)).map(sessionValue);
+    const rows = workspaceId === undefined ? db.prepare("SELECT * FROM sessions WHERE id>? ORDER BY id LIMIT ?").all(after, pageSize(limit))
+      : db.prepare("SELECT * FROM sessions WHERE workspace_id=? AND id>? ORDER BY id LIMIT ?").all(identifier(workspaceId), after, pageSize(limit));
+    return rows.map(sessionValue);
+  },
+  transcript({ id, workspaceId, before = null }) {
+    if (requireSession(id).workspace_id !== identifier(workspaceId)) throw fail("WORKSPACE_SCOPE", "Session is not in this workspace");
+    if (before !== null && (!Number.isSafeInteger(before) || before <= 0)) throw fail("INVALID_CURSOR", "Choose a valid transcript cursor");
+    const rows = db.prepare(`SELECT id,ordinal,prompt,answer,state,error,created_at FROM turns
+      WHERE session_id=? AND ordinal<? ORDER BY ordinal DESC LIMIT 2`).all(id, before ?? Number.MAX_SAFE_INTEGER);
+    return { turn: rows[0] ?? null, cursor: rows.length > 1 ? rows[0].ordinal : null };
   },
   enqueue(args) { return transaction(() => enqueueTurnRecord(args)); },
   reserveSteer({ id, turnId, prompt, clientMessageId }) {

@@ -264,6 +264,7 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
       return { turnId: result.id, state: result.state };
     },
     events(id, options = {}) { checkOpen(); return store.call("events", { ...options, id }); },
+    transcript(id, { workspaceId, before } = {}) { checkOpen(); return store.call("transcript", { id, workspaceId, before }); },
     sessions(options = {}) { checkOpen(); return store.call("list", options); },
     session(id) { checkOpen(); return store.call("get", { id }); },
     closeSession(id) { checkOpen(); return store.call("closeSession", { id }); },
