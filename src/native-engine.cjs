@@ -65,7 +65,11 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
         return;
       }
       const settle = (state, error) => store.call("settle", { id, turnId: accepted.id, state, error });
-      const settleStopped = confirmed => confirmed ? settle("cancelled") : settle("unknown", "Driver did not confirm cancellation before shutdown");
+      const settleStopped = async confirmed => {
+        if (confirmed !== true) return settle("unknown", "Driver did not confirm cancellation before shutdown");
+        await settle("cancelled");
+        schedule(id);
+      };
       let outputFailure = null;
       const batcher = createTextBatcher({
         onFlush: async combinedDelta => {
