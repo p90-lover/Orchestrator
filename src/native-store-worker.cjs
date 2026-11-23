@@ -127,7 +127,7 @@ function enqueueTurnRecord({ id, prompt, clientMessageId, capacity = 32 }) {
   run("INSERT INTO turns(id,session_id,client_id,digest,prompt,state,answer,error,created_at,updated_at) VALUES(?,?,?,?,?,'queued','','',?,?)", turnId, id, clientMessageId, digest, prompt, at, at);
   settleSession(id);
   event(id, turnId, "turn.accepted");
-  return turn(id, turnId);
+  return { ...turn(id, turnId), startsQueue: queued === 0 };
 }
 
 const operations = {
@@ -136,7 +136,7 @@ const operations = {
     return transaction(() => {
       const { id } = createSessionRecord(options);
       const accepted = enqueueTurnRecord({ id, prompt, clientMessageId: "initial", capacity });
-      return { sessionId: id, turnId: accepted.id, state: accepted.state, duplicate: accepted.duplicate === true };
+      return { sessionId: id, turnId: accepted.id, state: accepted.state, duplicate: accepted.duplicate === true, startsQueue: accepted.startsQueue === true };
     });
   },
   get({ id }) { return requireSession(id); },

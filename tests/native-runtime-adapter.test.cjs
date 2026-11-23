@@ -158,6 +158,27 @@ test("host recover never dispatches a safe queued turn", async t => {
   assert.equal(f.runs.length, 0);
 });
 
+test("duplicate native launch receipts do not re-own or dispatch a persisted queued turn", async t => {
+  const f = fixture(t);
+  const scope = { workspaceId: "workspace", agent: "orchestrator-fixture", requestId: "saved-launch" };
+  const model = "fixture-model", prompt = "saved first turn";
+  const id = createHash("sha256").update(JSON.stringify([scope.workspaceId, scope.requestId])).digest("hex");
+  const store = await openNativeStore({ dataRoot: f.root });
+  let accepted;
+  try {
+    accepted = await store.call("launch", { session: { id, workspaceId: scope.workspaceId, harness: scope.agent,
+      root: await fs.promises.realpath(__dirname), config: { model, approvalMode: "read-only", plain: false, subagent: false, engineVersion: "0.2-native-adapter" } }, prompt });
+  } finally { await store.close(); }
+  const sessionId = `native:${id}`, reopened = f.create();
+  assert.equal(await reopened.harness.spawn({ ...scope, model, prompt }), sessionId);
+  assert.equal(await reopened.harness.continuable(sessionId), false);
+  await assert.rejects(reopened.harness.send(sessionId, "not attached", "next-input"), { code: "NATIVE_REATTACH_REQUIRED" });
+  assert.deepEqual((await reopened.call("native_launch_receipt", scope)).launchReceipt, { ...scope, sessionId, turnId: accepted.turnId });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal((await reopened.harness.recover(sessionId, accepted.turnId)).turnState, "queued");
+  assert.equal(f.runs.length, 0);
+});
+
 test("native session settings cannot persist credentials or arbitrary launch commands", async t => {
   const f = fixture(t), store = await openNativeStore({ dataRoot: f.root });
   try {

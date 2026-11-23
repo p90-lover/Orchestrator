@@ -114,7 +114,7 @@ function createNativeRuntimeAdapter({ dataRoot, drivers, driverFactory = null, c
       const id = requestId === undefined ? randomUUID() : launchSessionId(workspaceId, requestId);
       await start();
       const accepted = await live().launch({ id, workspaceId, harness: agent, root, name, config }, prompt);
-      if (!accepted.duplicate || accepted.state === "queued") ownedSessions.add(accepted.sessionId);
+      if (!accepted.duplicate) ownedSessions.add(accepted.sessionId);
       return externalId(accepted.sessionId);
     },
     async observe(id, expectedTurn) { return observation(id, expectedTurn); },

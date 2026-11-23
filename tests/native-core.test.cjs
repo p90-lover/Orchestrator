@@ -281,8 +281,11 @@ test("queued recovery executes queued work only under explicit engine.recover an
   assert.equal(observed.turnState, "queued");
   assert.equal((await engine.recover(session.id, previous.id)).recovery, "observed");
   assert.equal((await engine.recover(session.id)).recovery, "observed");
+  assert.deepEqual(await engine.send(session.id, "first-queued", "c-1"), { turnId: turnA.id, state: "queued", duplicate: true });
+  const turnB = await engine.send(session.id, "next-queued", "c-2");
   await pause(100);
   assert.equal((await engine.observe(session.id, turnA.id)).turnState, "queued");
+  assert.equal((await engine.observe(session.id, turnB.turnId)).turnState, "queued");
   assert.deepEqual(runs, []);
 
   // Step 3: Explicit recover schedules the queued turn
@@ -290,15 +293,15 @@ test("queued recovery executes queued work only under explicit engine.recover an
   assert.equal(recovered.recovery, "scheduled");
   assert.equal(recovered.replayed, false);
 
-  await until(() => engine.observe(session.id, turnA.id), v => v.turnState === "completed");
-  assert.deepEqual(runs, ["first-queued"]);
+  await until(() => engine.observe(session.id, turnB.turnId), v => v.turnState === "completed");
+  assert.deepEqual(runs, ["first-queued", "next-queued"]);
   assert.equal((await engine.observe(session.id, turnA.id)).answer, "done:first-queued");
 
   // Step 4: Deduplication is preserved across restart
   const duplicateSend = await engine.send(session.id, "first-queued", "c-1");
   assert.equal(duplicateSend.turnId, turnA.id);
   assert.equal(duplicateSend.duplicate, true);
-  assert.equal(runs.length, 1);
+  assert.equal(runs.length, 2);
 });
 
 test("ambiguous driver outcomes remain unknown after a cancel request without an owner", async t => {

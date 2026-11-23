@@ -1,6 +1,6 @@
 "use strict";
 
-const { spawn } = require("node:child_process");
+const childProcess = require("node:child_process");
 const path = require("node:path");
 const { StringDecoder } = require("node:string_decoder");
 const failure = (code, message) => Object.assign(new Error(message), { code });
@@ -8,18 +8,31 @@ const failure = (code, message) => Object.assign(new Error(message), { code });
 function createJsonLineClient({ executable, args = [], cwd, env, onNotification = () => {}, onRequest, onClose = () => {}, maxMessageBytes = 2 * 1024 * 1024, requestTimeoutMs = 30000 }) {
   if (typeof executable !== "string" || !path.isAbsolute(executable) || !path.isAbsolute(cwd)) throw failure("INVALID_LAUNCH", "Absolute executable and working directory are required");
   if (!Array.isArray(args) || args.some(value => typeof value !== "string" || value.includes("\0"))) throw failure("INVALID_LAUNCH", "Invalid launch arguments");
-  const child = spawn(executable, args, { cwd, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  const child = childProcess.spawn(executable, args, { cwd, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
   const pending = new Map();
   const decoder = new StringDecoder("utf8");
-  let buffer = "", sequence = 0, closed = false, requestCount = 0;
-  const exited = new Promise(resolve => child.once("close", resolve));
+  let buffer = "", sequence = 0, closed = false, processEnded = false, requestCount = 0;
+  const exited = new Promise(resolve => {
+    const finish = () => {
+      if (processEnded) return;
+      processEnded = true;
+      shutdown(failure("DRIVER_EXITED", "Harness process exited before its outcome was confirmed"));
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve();
+    };
+    // A descendant can keep the pipes open after the owned process exits.
+    child.once("exit", finish);
+    child.once("close", finish);
+  });
   function shutdown(error) {
     if (closed) return;
     closed = true;
     for (const request of pending.values()) { clearTimeout(request.timer); request.reject(error); }
     pending.clear();
     try { onClose(error); } catch {}
-    child.kill();
+    if (!processEnded) child.kill();
   }
   function send(value) {
     if (closed) throw failure("DRIVER_CLOSED", "Harness connection is closed");
@@ -48,6 +61,7 @@ function createJsonLineClient({ executable, args = [], cwd, env, onNotification 
     else request.reject(failure("INVALID_PROTOCOL", "Harness reply has no result"));
   }
   child.stdout.on("data", chunk => {
+    if (closed) return;
     try {
       buffer += decoder.write(chunk);
       for (let end = buffer.indexOf("\n"); end !== -1; end = buffer.indexOf("\n")) {
@@ -61,7 +75,6 @@ function createJsonLineClient({ executable, args = [], cwd, env, onNotification 
   // Drain diagnostics without retaining them or persisting provider output.
   child.stderr.on("data", () => {});
   child.on("error", () => shutdown(failure("DRIVER_SPAWN_FAILED", "Harness process could not start")));
-  child.on("close", () => shutdown(failure("DRIVER_EXITED", "Harness process exited before its outcome was confirmed")));
   child.stdin.on("error", () => shutdown(failure("DRIVER_WRITE_FAILED", "Harness request delivery is uncertain")));
   return Object.freeze({
     request(method, params = {}) {

@@ -179,14 +179,15 @@ async function createNativeEngine({ dataRoot, drivers = {}, queueCapacity = 32, 
     },
     async createSession(options) { return store.call("create", sessionOptions(options)); },
     async launch(options, prompt) {
-      const accepted = await store.call("launch", { session: sessionOptions(options), prompt, capacity: queueCapacity });
-      if (accepted.state === "queued") schedule(accepted.sessionId);
+      const { startsQueue, ...accepted } = await store.call("launch", { session: sessionOptions(options), prompt, capacity: queueCapacity });
+      if (startsQueue) schedule(accepted.sessionId);
       return accepted;
     },
     async send(id, prompt, clientMessageId) {
       checkOpen();
       const accepted = await store.call("enqueue", { id, prompt, clientMessageId, capacity: queueCapacity });
-      if (accepted.state === "queued") schedule(id);
+      // An older queue may have survived a restart without an owner. Only explicit recovery can activate it.
+      if (accepted.startsQueue) schedule(id);
       return { turnId: accepted.id, state: accepted.state, duplicate: accepted.duplicate === true };
     },
     async steer(id, turnId, prompt, clientMessageId, workspaceId) {
